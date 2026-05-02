@@ -14,7 +14,8 @@
     "lint": "echo 'wire eslint once initialized'",
     "typecheck": "echo 'wire tsc --noEmit once initialized'",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "start": "echo 'Service must override start via RAILWAY_RUN_COMMAND env var' && exit 1"
   },
   "devDependencies": {
     "prettier": "^3.3.3",
