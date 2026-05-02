@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Athena Companion",
+  "short_name": "Athena",
+  "version": "0.1.0",
+  "description": "Detects Google Meet sessions and pairs them with the Athena overlay.",
+  "permissions": ["tabs", "storage", "activeTab", "scripting", "notifications", "alarms", "tabCapture", "offscreen"],
+  "host_permissions": ["https://meet.google.com/*"],
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Athena",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content/index.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

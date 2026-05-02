@@ -1,0 +1,23 @@
+{
+  "name": "athena",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Athena — multi-tenant sales copilot monorepo",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build": "echo 'wire per-package build once initialized'",
+    "test": "echo 'wire per-package test once initialized'",
+    "lint": "echo 'wire eslint once initialized'",
+    "typecheck": "echo 'wire tsc --noEmit once initialized'",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.0"
+  }
+}

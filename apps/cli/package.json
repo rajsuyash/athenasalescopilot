@@ -1,0 +1,30 @@
+{
+  "name": "@athena/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Athena CLI — drive auth, knowledge ingest, and live coaching from the terminal.",
+  "type": "module",
+  "bin": {
+    "athena": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/index.ts",
+    "test": "node --test --import tsx 'src/**/*.test.ts'",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@athena/sdk-stt": "workspace:*",
+    "kleur": "^4.1.5",
+    "ora": "^8.1.1",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

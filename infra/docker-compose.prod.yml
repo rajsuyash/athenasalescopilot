@@ -1,0 +1,193 @@
+# Production compose — single host, single domain, Caddy in front.
+#
+# Required env (in a .env next to this file):
+#   ATHENA_DOMAIN                 — public hostname (e.g. athena.app)
+#   POSTGRES_PASSWORD             — strong password for the managed/local pg
+#   JWT_ACCESS_SECRET             — ≥32 chars
+#   JWT_REFRESH_SECRET            — ≥32 chars
+#   ANTHROPIC_API_KEY (optional)
+#   OPENAI_API_KEY    (optional)
+#   DEEPGRAM_API_KEY  (optional)
+#   STRIPE_SECRET_KEY (optional — leave blank for mock billing)
+#   STRIPE_WEBHOOK_SECRET (optional)
+#   SENTRY_DSN        (optional)
+#
+# Bootstrap:
+#   docker compose -f infra/docker-compose.prod.yml --env-file infra/.env up -d --build
+#   docker compose -f infra/docker-compose.prod.yml exec api pnpm --filter @athena/db prisma migrate deploy
+#   docker compose -f infra/docker-compose.prod.yml exec api psql $DATABASE_URL -f /app/packages/db/prisma/migrations/manual/01_pgvector_chunk_embedding.sql
+
+name: athena-prod
+
+x-env: &shared-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://athena:${POSTGRES_PASSWORD}@postgres:5432/athena
+  REDIS_URL: redis://redis:6379
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+  JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+  CORS_ORIGINS: https://${ATHENA_DOMAIN}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  SENTRY_ENVIRONMENT: production
+  LOG_LEVEL: info
+  # Cross-service URLs (private network)
+  API_URL: http://api:4000
+  KNOWLEDGE_URL: http://knowledge:4010
+  ORCHESTRATOR_URL: http://orchestrator:4020
+  POSTCALL_URL: http://postcall:4030
+  RETENTION_URL: http://retention:4050
+  ANALYTICS_URL: http://analytics:4060
+  BILLING_URL: http://billing:4070
+  GATEWAY_URL: http://realtime-gateway:4040
+  # AI providers
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_MODEL: claude-sonnet-4-6
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  EMBEDDING_DIMENSION: 256
+  DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+  DEEPGRAM_MODEL: nova-2
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: athena
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: athena
+    # Bind to loopback only on a non-Paperclip port (Paperclip uses 54329).
+    # Internal services reach Postgres via the compose network as `postgres:5432`.
+    ports:
+      - '127.0.0.1:54330:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U athena -d athena']
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    # Bind to loopback only on a non-default port to avoid colliding with any
+    # other Redis on the host. Internal services use `redis:6379`.
+    ports:
+      - '127.0.0.1:6380:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: .., dockerfile: infra/Dockerfile }
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    command: ['pnpm', '--filter', '@athena/api', 'start']
+
+  knowledge:
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on: [postgres, redis]
+    command: ['pnpm', '--filter', '@athena/knowledge-service', 'start']
+
+  orchestrator:
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on: [postgres, redis, knowledge]
+    command: ['pnpm', '--filter', '@athena/orchestrator-service', 'start']
+
+  postcall:
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on: [postgres, redis]
+    command: ['pnpm', '--filter', '@athena/postcall-service', 'start']
+
+  realtime-gateway:
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on: [postgres, redis, orchestrator, postcall]
+    command: ['pnpm', '--filter', '@athena/realtime-gateway', 'start']
+
+  retention:
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on: [postgres]
+    command: ['pnpm', '--filter', '@athena/retention-worker', 'start']
+
+  analytics:
+    image: athena:latest
+    restart: unless-stopped
+    environment: *shared-env
+    depends_on: [postgres]
+    command: ['pnpm', '--filter', '@athena/analytics-service', 'start']
+
+  billing:
+    image: athena:latest
+    restart: unless-stopped
+    environment:
+      <<: *shared-env
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
+    depends_on: [postgres]
+    command: ['pnpm', '--filter', '@athena/billing-service', 'start']
+
+  admin-web:
+    image: athena:latest
+    restart: unless-stopped
+    environment:
+      <<: *shared-env
+      ATHENA_API_URL: http://api:4000
+      ATHENA_KNOWLEDGE_URL: http://knowledge:4010
+      ATHENA_ORCHESTRATOR_URL: http://orchestrator:4020
+      ATHENA_POSTCALL_URL: http://postcall:4030
+      ATHENA_RETENTION_URL: http://retention:4050
+      ATHENA_ANALYTICS_URL: http://analytics:4060
+      ATHENA_BILLING_URL: http://billing:4070
+      ATHENA_PUBLIC_URL: https://${ATHENA_DOMAIN}
+    depends_on: [api]
+    command: ['pnpm', '--filter', '@athena/admin-web', 'start']
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    # Caddy is the ONLY service bound to the public IP. Verify nothing else on
+    # the host is listening on :80 / :443 before bringing this up:
+    #   sudo ss -tlnp '( sport = :80 or sport = :443 )'
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      ATHENA_DOMAIN: ${ATHENA_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - admin-web
+      - api
+      - knowledge
+      - orchestrator
+      - postcall
+      - billing
+      - analytics
+      - realtime-gateway
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

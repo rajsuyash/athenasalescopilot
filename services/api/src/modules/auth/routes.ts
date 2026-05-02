@@ -1,0 +1,173 @@
+import crypto from 'node:crypto';
+import argon2 from 'argon2';
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { prisma } from '@athena/db';
+import type { Role } from '@athena/shared-types';
+import { Errors } from '../../lib/errors.js';
+import { seedWorkspaceKnowledge } from '../../lib/seed-workspace.js';
+import type { AccessTokenClaims, RefreshTokenClaims } from '../../lib/types.js';
+import { login, signup } from './service.js';
+
+const SignupBody = z.object({
+  email: z.string().email(),
+  password: z.string().min(12),
+  name: z.string().min(1).max(120),
+  workspaceName: z.string().min(1).max(120),
+  workspaceSlug: z
+    .string()
+    .min(2)
+    .max(60)
+    .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/, 'lowercase letters, digits, and dashes only'),
+});
+
+const LoginBody = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+  workspaceSlug: z.string().optional(),
+});
+
+const RefreshBody = z.object({
+  refreshToken: z.string().min(1),
+});
+
+const REFRESH_TTL_DAYS = 30;
+
+interface AuthDeps {
+  refreshSecret: string;
+  knowledgeUrl: string;
+}
+
+export function authRoutes(deps: AuthDeps) {
+  return async function (app: FastifyInstance): Promise<void> {
+    async function issueTokens(input: {
+      userId: string;
+      workspaceId: string;
+      membershipId: string;
+      role: Role;
+    }) {
+      const claims: AccessTokenClaims = {
+        sub: input.userId,
+        workspaceId: input.workspaceId,
+        role: input.role,
+        membershipId: input.membershipId,
+      };
+      const accessToken = app.jwt.sign(claims);
+
+      // Refresh token: random opaque string, hashed at rest, persisted for revocation.
+      const refreshRaw = crypto.randomBytes(48).toString('base64url');
+      const tokenHash = await argon2.hash(refreshRaw, { type: argon2.argon2id });
+      const expiresAt = new Date(Date.now() + REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000);
+      await prisma.refreshToken.create({
+        data: {
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+          tokenHash,
+          expiresAt,
+        },
+      });
+      // We return a packed string `<id>.<raw>` so we can find the row on refresh.
+      // The id is non-secret; the raw remains server-secret-only after hashing.
+      const lastRow = await prisma.refreshToken.findFirstOrThrow({
+        where: { tokenHash },
+        select: { id: true },
+      });
+      return { accessToken, refreshToken: `${lastRow.id}.${refreshRaw}`, expiresAt };
+    }
+
+    app.post(
+      '/auth/signup',
+      {
+        config: {
+          rateLimit: { max: 5, timeWindow: '1 hour' },
+        },
+      },
+      async (req, reply) => {
+        const body = SignupBody.parse(req.body);
+        const created = await signup(body);
+        const tokens = await issueTokens(created);
+        // Fire-and-forget: don't block signup on knowledge-service availability.
+        void seedWorkspaceKnowledge({
+          knowledgeUrl: deps.knowledgeUrl,
+          accessToken: tokens.accessToken,
+        });
+        reply.status(201);
+        return { ...tokens, user: { id: created.userId }, workspace: { id: created.workspaceId } };
+      },
+    );
+
+    app.post(
+      '/auth/login',
+      {
+        config: {
+          rateLimit: { max: 20, timeWindow: '15 minutes' },
+        },
+      },
+      async (req) => {
+        const body = LoginBody.parse(req.body);
+        const r = await login(body);
+        const tokens = await issueTokens(r);
+        return { ...tokens, user: { id: r.userId }, workspace: { id: r.workspaceId } };
+      },
+    );
+
+    app.post('/auth/refresh', async (req) => {
+      const { refreshToken } = RefreshBody.parse(req.body);
+      const [id, raw] = refreshToken.split('.');
+      if (!id || !raw) throw Errors.tokenInvalid();
+      const row = await prisma.refreshToken.findUnique({ where: { id } });
+      if (!row) throw Errors.tokenInvalid();
+      if (row.revokedAt) throw Errors.tokenInvalid();
+      if (row.expiresAt < new Date()) throw Errors.tokenExpired();
+      const ok = await argon2.verify(row.tokenHash, raw);
+      if (!ok) throw Errors.tokenInvalid();
+
+      const membership = await prisma.userWorkspaceMembership.findFirstOrThrow({
+        where: { userId: row.userId, workspaceId: row.workspaceId, status: 'active' },
+      });
+
+      // Rotate: revoke old, mint new.
+      await prisma.refreshToken.update({
+        where: { id: row.id },
+        data: { revokedAt: new Date() },
+      });
+
+      const tokens = await issueTokens({
+        userId: row.userId,
+        workspaceId: row.workspaceId,
+        membershipId: membership.id,
+        role: membership.role as Role,
+      });
+      return tokens;
+    });
+
+    app.post('/auth/logout', async (req, reply) => {
+      const { refreshToken } = RefreshBody.parse(req.body);
+      const [id] = refreshToken.split('.');
+      if (id) {
+        await prisma.refreshToken.updateMany({
+          where: { id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+      reply.status(204).send();
+    });
+
+    app.get('/auth/me', async (req) => {
+      const claims = await req.requireAuth();
+      const me = await prisma.user.findUniqueOrThrow({
+        where: { id: claims.sub },
+        select: { id: true, email: true, name: true },
+      });
+      const ws = await prisma.workspace.findUniqueOrThrow({
+        where: { id: claims.workspaceId },
+        select: { id: true, name: true, slug: true, planTier: true },
+      });
+      return { user: me, workspace: ws, role: claims.role };
+    });
+  };
+  // Note: deps.refreshSecret reserved for signed-refresh future; opaque random for now.
+  void deps;
+}
+
+export type { RefreshTokenClaims };

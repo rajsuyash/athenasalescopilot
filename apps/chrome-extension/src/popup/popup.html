@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Athena</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f17;
+        --fg: #e5e7eb;
+        --muted: #9ca3af;
+        --border: rgba(255, 255, 255, 0.08);
+        --accent: #6ee7b7;
+      }
+      html, body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont;
+      }
+      body {
+        width: 320px;
+        padding: 12px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 13px;
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .muted { color: var(--muted); }
+      .row { display: flex; gap: 8px; align-items: center; }
+      .pill {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        background: rgba(110, 231, 183, 0.15);
+        color: var(--accent);
+      }
+      button, .btn {
+        appearance: none;
+        background: var(--accent);
+        color: var(--bg);
+        border: 0;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-weight: 600;
+        cursor: pointer;
+        text-decoration: none;
+        font-size: 12px;
+      }
+      .btn-secondary {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--fg);
+      }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 8px;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .stack { display: flex; flex-direction: column; gap: 6px; }
+    </style>
+  </head>
+  <body>
+    <h1>Athena Companion</h1>
+    <p class="muted" style="margin: 0 0 8px;">
+      Detects Google Meet sessions and pairs them with the overlay.
+    </p>
+    <div id="root"></div>
+    <script type="module" src="popup/index.js"></script>
+  </body>
+</html>

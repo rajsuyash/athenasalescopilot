@@ -1,0 +1,36 @@
+{
+  "name": "@athena/orchestrator-service",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Stages A (intent) + C (grounded answer). PRD F4, F5.",
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "test": "node --test --import tsx 'src/**/*.test.ts'",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@athena/db": "workspace:*",
+    "@athena/policies": "workspace:*",
+    "@athena/sdk-embeddings": "workspace:*",
+    "@athena/sdk-llm": "workspace:*",
+    "@athena/shared-types": "workspace:*",
+    "@fastify/cors": "^10.0.1",
+    "@fastify/jwt": "^9.0.1",
+    "@fastify/sensible": "^6.0.1",
+    "fastify": "^5.1.0",
+    "fastify-plugin": "^5.0.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

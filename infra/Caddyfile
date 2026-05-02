@@ -1,0 +1,59 @@
+# Caddy reverse proxy — single domain in front of every backend service.
+#
+# Production hostname is provided via the ATHENA_DOMAIN env var (Caddy
+# substitutes {$ATHENA_DOMAIN} at startup).
+#
+# Routing summary:
+#   /v1/*          → api          (REST, auth, meetings, scripts, etc.)
+#   /knowledge/*   → knowledge    (ingest + retrieval)
+#   /orchestrator/* → orchestrator (Stage A/C)
+#   /postcall/*    → postcall     (Stage D recap)
+#   /billing/*     → billing      (Stripe + plan tier)
+#   /analytics/*   → analytics    (workspace aggregations)
+#   /retention/*   → retention    (compliance jobs)
+#   /ws            → realtime-gateway (WebSocket upgrade)
+#   everything else → admin-web   (Next.js)
+
+{$ATHENA_DOMAIN} {
+    encode zstd gzip
+
+    @ws path /ws /ws/*
+    handle @ws {
+        reverse_proxy realtime-gateway:4040 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    handle_path /knowledge/* {
+        reverse_proxy knowledge:4010
+    }
+    handle_path /orchestrator/* {
+        reverse_proxy orchestrator:4020
+    }
+    handle_path /postcall/* {
+        reverse_proxy postcall:4030
+    }
+    handle_path /billing/* {
+        reverse_proxy billing:4070
+    }
+    handle_path /analytics/* {
+        reverse_proxy analytics:4060
+    }
+    handle_path /retention/* {
+        reverse_proxy retention:4050
+    }
+
+    handle /v1/* {
+        reverse_proxy api:4000
+    }
+    handle /healthz {
+        reverse_proxy api:4000
+    }
+
+    handle {
+        reverse_proxy admin-web:3000
+    }
+}

@@ -1,0 +1,13 @@
+packages:
+  - 'apps/admin-web'
+  - 'apps/chrome-extension'
+  - 'apps/cli'
+  - 'services/*'
+  - 'packages/shared-types'
+  - 'packages/policies'
+  - 'packages/db'
+  - 'packages/ui'
+  - 'packages/prompts'
+  - 'packages/sdk/embeddings'
+  - 'packages/sdk/llm'
+  - 'packages/sdk/stt'

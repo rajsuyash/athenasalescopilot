@@ -1,0 +1,10 @@
+# Nixpacks build config for Railway. Each service's railway.json overrides
+# the build/start commands; this file just locks the runtime versions so
+# pnpm + Node + OpenSSL line up across every Athena service.
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "pnpm-9_x", "openssl"]
+
+[variables]
+NODE_VERSION = "20"
+PNPM_VERSION = "9"

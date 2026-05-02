@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  height: 100%;
+  background-color: #0b0f17;
+  color: #e5e7eb;
+}
+
+body {
+  font-feature-settings: "rlig" 1, "calt" 1;
+}

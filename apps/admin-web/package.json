@@ -1,0 +1,30 @@
+{
+  "name": "@athena/admin-web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Athena admin web — knowledge management + meetings + recap.",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "test": "echo 'wire later'",
+    "clean": "rm -rf .next *.tsbuildinfo"
+  },
+  "dependencies": {
+    "next": "^15.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.0"
+  }
+}

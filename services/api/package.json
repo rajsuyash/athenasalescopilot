@@ -1,0 +1,41 @@
+{
+  "name": "@athena/api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Athena core REST API. Auth, workspaces, RBAC, knowledge metadata, meetings.",
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && mkdir -p dist/seed && cp -R src/seed/* dist/seed/",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "test": "node --test --import tsx 'src/**/*.test.ts'",
+    "lint": "echo 'wire eslint'",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@athena/db": "workspace:*",
+    "@athena/policies": "workspace:*",
+    "@athena/shared-types": "workspace:*",
+    "@fastify/cors": "^10.0.1",
+    "@fastify/helmet": "^12.0.1",
+    "@fastify/jwt": "^9.0.1",
+    "@fastify/rate-limit": "^10.1.1",
+    "@fastify/sensible": "^6.0.1",
+    "@sentry/node": "^8.42.0",
+    "argon2": "^0.41.1",
+    "fastify": "^5.1.0",
+    "fastify-plugin": "^5.0.1",
+    "fastify-type-provider-zod": "^4.0.2",
+    "ioredis": "^5.4.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
