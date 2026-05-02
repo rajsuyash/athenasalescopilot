@@ -1,0 +1,43 @@
+{
+  "name": "@athena/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared Prisma client + schema + migrations.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:format": "prisma format",
+    "clean": "rm -rf dist *.tsbuildinfo node_modules/.prisma"
+  },
+  "dependencies": {
+    "@athena/shared-types": "workspace:*",
+    "@prisma/client": "^5.22.0",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.0"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  }
+}

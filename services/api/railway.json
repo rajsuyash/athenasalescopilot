@@ -5,7 +5,7 @@
     "buildCommand": "corepack enable && pnpm install --frozen-lockfile && pnpm --filter @athena/api... build && pnpm --filter @athena/db prisma generate"
   },
   "deploy": {
-    "startCommand": "pnpm --filter @athena/db prisma migrate deploy && node services/api/dist/server.js",
+    "startCommand": "pnpm --filter @athena/db prisma migrate deploy && node packages/db/scripts/apply-manual-migrations.mjs && node services/api/dist/server.js",
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
