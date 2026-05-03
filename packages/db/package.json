@@ -22,6 +22,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:db:push": "prisma db push --skip-generate --accept-data-loss",
     "prisma:studio": "prisma studio",
     "prisma:format": "prisma format",
     "clean": "rm -rf dist *.tsbuildinfo node_modules/.prisma"
