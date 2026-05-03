@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { serverEnv } from '@/lib/env';
+import { publicRedirectUrl } from '@/lib/redirect';
 import { setSession } from '@/lib/session';
 
 interface LoginResp {
@@ -37,7 +38,7 @@ export async function POST(req: Request): Promise<Response> {
     const e = payload as { error?: string; message?: string } | null;
     const msg = e?.message ?? `HTTP ${res.status}`;
     return NextResponse.redirect(
-      new URL(`/signin?error=${encodeURIComponent(msg)}`, req.url),
+      publicRedirectUrl(`/signin?error=${encodeURIComponent(msg)}`, req),
       303,
     );
   }
@@ -48,5 +49,5 @@ export async function POST(req: Request): Promise<Response> {
     expiresAt: data.expiresAt,
     workspaceId: data.workspace.id,
   });
-  return NextResponse.redirect(new URL('/dashboard', req.url), 303);
+  return NextResponse.redirect(publicRedirectUrl('/dashboard', req), 303);
 }

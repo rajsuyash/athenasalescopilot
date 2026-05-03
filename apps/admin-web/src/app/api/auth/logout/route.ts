@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { serverEnv } from '@/lib/env';
+import { publicRedirectUrl } from '@/lib/redirect';
 import { clearSession, getSession } from '@/lib/session';
 
 export async function POST(req: Request): Promise<Response> {
@@ -17,5 +18,5 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
   await clearSession();
-  return NextResponse.redirect(new URL('/signin', req.url), 303);
+  return NextResponse.redirect(publicRedirectUrl('/signin', req), 303);
 }
