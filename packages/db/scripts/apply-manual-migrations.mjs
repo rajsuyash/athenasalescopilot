@@ -21,7 +21,7 @@ const require = createRequire(import.meta.url);
 // install via `pnpm --filter @athena/db add pg`.
 const { Client } = require('pg');
 
-const MANUAL_DIR = join(__dirname, '..', 'prisma', 'migrations', 'manual');
+const MANUAL_DIR = join(__dirname, '..', 'manual-sql');
 
 async function main() {
   if (!process.env.DATABASE_URL) {
