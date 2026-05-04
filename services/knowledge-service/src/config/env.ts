@@ -14,6 +14,15 @@ const Schema = z.object({
   EMBEDDING_MODEL: z.string().optional(),
   EMBEDDING_DIMENSION: z.coerce.number().int().positive().default(256),
 
+  // Block Q — BMC + script generator routes need a real Claude client.
+  // Optional in dev so the service still boots without an API key; routes
+  // that require it return 503 when the key is absent.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-6'),
+  /** Where the .skill bundles live. Override in tests / when shipping a
+   *  prebaked skills dir into the container. */
+  SKILLS_DIR: z.string().default('skills'),
+
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3000')

@@ -1,13 +1,16 @@
+import { resolve } from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import sensible from '@fastify/sensible';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createEmbeddingClient } from '@athena/sdk-embeddings';
+import { createLlmClient, initSkills } from '@athena/sdk-llm';
 import { loadEnv } from './config/env.js';
 import { authPlugin } from './lib/auth.js';
 import { errorHandlerPlugin } from './lib/error-handler.js';
 import { ingestRoutes } from './modules/ingest/routes.js';
 import { retrievalRoutes } from './modules/retrieval/routes.js';
+import { bmcRoutes } from './modules/bmc/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const env = loadEnv();
@@ -20,6 +23,18 @@ export async function buildApp(): Promise<FastifyInstance> {
     genReqId: () => crypto.randomUUID(),
     bodyLimit: 50 * 1024 * 1024,
   });
+
+  // Block Q — load Anthropic Skill bundles into memory once at boot. Resolve
+  // relative to cwd so the same path works in dev (athena/skills) and in the
+  // Railway container layout. Failure to load is non-fatal — BMC routes
+  // gracefully fail when a skill is missing.
+  try {
+    const skillsDir = resolve(process.cwd(), env.SKILLS_DIR);
+    const r = initSkills(skillsDir);
+    app.log.info({ skillsDir, ...r }, 'skills loaded');
+  } catch (err) {
+    app.log.warn({ err }, 'skills failed to load — BMC routes will 503 until fixed');
+  }
 
   await app.register(cors, { origin: env.CORS_ORIGINS, credentials: true });
   await app.register(sensible);
@@ -35,10 +50,24 @@ export async function buildApp(): Promise<FastifyInstance> {
     deterministicDimension: env.EMBEDDING_DIMENSION,
   });
 
+  const llm = createLlmClient({
+    provider: env.ANTHROPIC_API_KEY ? 'anthropic' : 'mock',
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    anthropicModel: env.ANTHROPIC_MODEL,
+  });
+
   app.get('/healthz', async () => ({ ok: true }));
 
   await app.register(ingestRoutes({ embeddings }), { prefix: '/v1' });
   await app.register(retrievalRoutes({ embeddings }), { prefix: '/v1' });
+  await app.register(
+    bmcRoutes({
+      llm,
+      anthropicApiKey: env.ANTHROPIC_API_KEY ?? '',
+      anthropicModel: env.ANTHROPIC_MODEL,
+    }),
+    { prefix: '/v1' },
+  );
 
   return app;
 }
