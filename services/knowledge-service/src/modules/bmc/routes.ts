@@ -22,6 +22,7 @@ import {
   type BmcData,
   type BmcSection,
 } from './service.js';
+import { generateScriptFromBmc } from './generator.js';
 
 interface RouteDeps {
   llm: LlmClient;
@@ -88,6 +89,29 @@ export function bmcRoutes(deps: RouteDeps) {
         sourceType: 'pdf',
       });
       return { ok: true, version: r.version, data: extracted.data, confidence: extracted.confidence };
+    });
+
+    app.post('/playbooks/script/generate-from-bmc', async (req, reply) => {
+      const claims = await req.requirePermission('script:edit');
+      try {
+        const r = await generateScriptFromBmc(
+          { workspaceId: claims.workspaceId, actorUserId: claims.sub },
+          { llm: deps.llm },
+        );
+        return reply.code(201).send({
+          ok: true,
+          collectionId: r.collectionId,
+          versionId: r.versionId,
+          blockCount: r.blockCount,
+          generatedAt: r.generatedAt.toISOString(),
+        });
+      } catch (err) {
+        const e = err as { statusCode?: number; code?: string; message?: string };
+        return reply.code(e.statusCode ?? 500).send({
+          code: e.code ?? 'GENERATE_FAILED',
+          message: e.message ?? 'unknown',
+        });
+      }
     });
 
     app.post('/playbooks/bmc/build', async (req, reply) => {
