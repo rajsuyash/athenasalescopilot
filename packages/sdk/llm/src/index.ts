@@ -1,6 +1,7 @@
 export * from './types.js';
 export { AnthropicLlmClient } from './anthropic.js';
 export { MockLlmClient } from './mock.js';
+export { initSkills, loadSkill, loadedSkills } from './skills.js';
 
 import type { LlmClient } from './types.js';
 import { AnthropicLlmClient } from './anthropic.js';
