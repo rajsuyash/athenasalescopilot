@@ -281,6 +281,36 @@ const scriptCache = new Map<string, ScriptCache>();
 // so the gateway's worst-case staleness still satisfies the spec.
 const SCRIPT_TTL_MS = 25_000;
 
+/** Map free-form stage names users put in script blocks to canonical
+ *  stage IDs the coach uses internally. Workspace authors will write
+ *  "Pitching" / "Probing" / "Opening" — we coerce to opener/discovery/demo. */
+const STAGE_ALIASES: Record<string, string> = {
+  opening: 'opener',
+  intro: 'opener',
+  greeting: 'opener',
+  rapport: 'opener',
+  qualifying: 'qualification',
+  qualify: 'qualification',
+  probing: 'discovery',
+  probe: 'discovery',
+  pitching: 'demo',
+  pitch: 'demo',
+  presentation: 'demo',
+  presenting: 'demo',
+  objection: 'objection_handling',
+  objections: 'objection_handling',
+  reframe: 'objection_handling',
+  close: 'closing',
+  closingstep: 'closing',
+  nextsteps: 'closing',
+  followup: 'closing',
+};
+
+function normalizeStage(raw: string): string {
+  const s = raw.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  return STAGE_ALIASES[s] ?? s;
+}
+
 async function getActiveScriptForStage(
   workspaceId: string,
   stage: string,
@@ -299,9 +329,10 @@ async function getActiveScriptForStage(
       const byStage = new Map<string, ScriptBlock[]>();
       for (const c of collections) {
         for (const b of c.currentVersion?.blocks ?? []) {
-          const arr = byStage.get(b.stage) ?? [];
-          arr.push({ stage: b.stage, bodyMd: b.bodyMd });
-          byStage.set(b.stage, arr);
+          const key = normalizeStage(b.stage);
+          const arr = byStage.get(key) ?? [];
+          arr.push({ stage: key, bodyMd: b.bodyMd });
+          byStage.set(key, arr);
         }
       }
       scriptCache.set(workspaceId, { byStage, loadedAt: Date.now() });
@@ -310,7 +341,18 @@ async function getActiveScriptForStage(
     }
   }
   const fresh = scriptCache.get(workspaceId);
-  const blocks = fresh?.byStage.get(stage) ?? [];
+  const wanted = normalizeStage(stage);
+  let blocks = fresh?.byStage.get(wanted) ?? [];
+  // Graceful fallback for proactive triggers — if the workspace has no
+  // block for this exact stage, try discovery (the most common authored
+  // stage), then any first available block. Better to suggest something
+  // grounded than to return null and stay silent.
+  if (blocks.length === 0 && fresh) {
+    blocks = fresh.byStage.get('discovery') ?? [];
+  }
+  if (blocks.length === 0 && fresh && fresh.byStage.size > 0) {
+    blocks = [...fresh.byStage.values()][0] ?? [];
+  }
   if (blocks.length === 0) return null;
   // Cap to ~600 chars total to keep the prompt small.
   let out = '';
