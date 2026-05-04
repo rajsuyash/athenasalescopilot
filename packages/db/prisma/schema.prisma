@@ -356,8 +356,11 @@ model KnowledgeChunk {
   visibilityScope   String   @default("workspace") @map("visibility_scope")
   language          String
   active            Boolean  @default(true)
-  // Embedding column declared in raw migration (Prisma's vector support is limited).
-  // See migrations/<ts>_add_chunk_embedding/migration.sql.
+  // Embedding column managed by raw SQL (pgvector). MUST be declared as
+  // Unsupported here so `prisma db push --accept-data-loss` does not drop it
+  // when reconciling the schema (which would silently NULL all stored vectors
+  // on every redeploy and break retrieval). See packages/db/manual-sql/01_pgvector_chunk_embedding.sql.
+  embedding         Unsupported("vector(256)")? @map("embedding")
 
   workspace       Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   documentVersion KnowledgeDocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
