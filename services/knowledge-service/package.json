@@ -19,6 +19,7 @@
     "@athena/sdk-embeddings": "workspace:*",
     "@athena/sdk-llm": "workspace:*",
     "@athena/shared-types": "workspace:*",
+    "@athena/skills": "workspace:*",
     "@fastify/cors": "^10.0.1",
     "@fastify/jwt": "^9.0.1",
     "@fastify/multipart": "^9.0.1",

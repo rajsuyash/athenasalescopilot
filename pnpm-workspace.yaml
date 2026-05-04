@@ -11,3 +11,4 @@ packages:
   - 'packages/sdk/embeddings'
   - 'packages/sdk/llm'
   - 'packages/sdk/stt'
+  - 'packages/skills'

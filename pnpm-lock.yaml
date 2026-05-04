@@ -183,6 +183,8 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  packages/skills: {}
+
   services/analytics-service:
     dependencies:
       '@athena/db':
@@ -362,6 +364,9 @@ importers:
       '@athena/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      '@athena/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0

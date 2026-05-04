@@ -1,10 +1,10 @@
-import { resolve } from 'node:path';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import sensible from '@fastify/sensible';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { createEmbeddingClient } from '@athena/sdk-embeddings';
 import { createLlmClient, initSkills } from '@athena/sdk-llm';
+import { dir as skillsDir } from '@athena/skills';
 import { loadEnv } from './config/env.js';
 import { authPlugin } from './lib/auth.js';
 import { errorHandlerPlugin } from './lib/error-handler.js';
@@ -24,12 +24,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     bodyLimit: 50 * 1024 * 1024,
   });
 
-  // Block Q — load Anthropic Skill bundles into memory once at boot. Resolve
-  // relative to cwd so the same path works in dev (athena/skills) and in the
-  // Railway container layout. Failure to load is non-fatal — BMC routes
-  // gracefully fail when a skill is missing.
+  // Block Q — load Anthropic Skill bundles into memory once at boot. The
+  // bundles ship as a workspace package (@athena/skills) so pnpm install
+  // copies them into node_modules for every dependent service — no cwd
+  // tricks, no env var, deploy-portable. Failure is non-fatal: BMC routes
+  // 503 when a skill is missing.
   try {
-    const skillsDir = resolve(process.cwd(), env.SKILLS_DIR);
     const r = initSkills(skillsDir);
     app.log.info({ skillsDir, ...r }, 'skills loaded');
   } catch (err) {

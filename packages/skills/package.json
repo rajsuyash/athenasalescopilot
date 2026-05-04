@@ -1,0 +1,20 @@
+{
+  "name": "@athena/skills",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Anthropic Skill bundles shipped in-tree. Consumers depend on this package and call dir() to locate the bundles directory.",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bundles"
+  ]
+}
