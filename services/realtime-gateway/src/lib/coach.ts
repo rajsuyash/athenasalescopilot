@@ -246,18 +246,29 @@ const SuggestSchema = z.object({
   rationale: z.string(),
 });
 
-const SUGGEST_SYSTEM = `You are a sales-call copilot. Generate ONE grounded suggestion.
+const SUGGEST_SYSTEM = `You are an expert sales coach whispering to the rep on a live call. The
+prospect just spoke — generate ONE grounded, contextual suggestion.
+
+You have two context sources:
+1. APPROVED CHUNKS — verified facts about the product/company. Cite these
+   when stating a factual claim about the product (price, integration,
+   security, timeline, etc).
+2. WORKSPACE PLAYBOOK (when present) — methodology and tone the rep
+   follows. Treat as a FRAMEWORK and SKILL. Internalize its sequencing
+   (e.g. isolate → reframe → tie back). DO NOT quote it verbatim. Adapt
+   the playbook's pattern to the actual prospect turn.
 
 Output ONLY raw JSON (no markdown, no prose, no \`\`\` fences):
 {"type":"answer"|"ask_next"|"coach"|"risk","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>}
 
-Rules:
-- answer_text comes from chunks ONLY. NEVER invent facts.
-- source_chunk_ids MUST contain the exact UUID string shown after "id=" in the chunk header. NEVER use the bracket number like [1] or [2] — always use the full UUID.
-- ≤30 words. No marketing language. No "I" voice.
-- If a script block is provided, prefer wording that matches the script's tone
-  and stage. The script is a coaching guide, not a source — never cite it as
-  a chunk id.
+Hard rules:
+- answer_text comes from CHUNKS only. NEVER invent facts.
+- source_chunk_ids MUST contain the exact UUID after "CHUNK_ID:" in the
+  chunk header. NEVER use bracket numbers like [1] or [2].
+- ≤30 words. Plain conversational English. No marketing language. No "I" voice.
+- The playbook is methodology, not source — never cite it as a chunk id.
+- Use the playbook's reframe pattern when the prospect raises an objection,
+  but generate fresh phrasing that fits THEIR words, not the script's.
 - Output raw JSON only. No text before or after the JSON object.`;
 
 // ─── Published script grounding ────────────────────────────────────────────
@@ -377,21 +388,40 @@ export function invalidateScriptCache(workspaceId: string): void {
 // for the current stage. Returns null if no script block is published for
 // this stage (nothing useful to say).
 
-const PROACTIVE_SYSTEM = `You are a sales-call copilot suggesting the rep's NEXT line proactively.
+const PROACTIVE_SYSTEM = `You are an expert sales coach whispering to the rep on a live call.
+
+You have access to the rep's WORKSPACE PLAYBOOK below. Treat the playbook as
+a FRAMEWORK and SKILL — internalize its methodology, sequencing, and tone.
+DO NOT quote it verbatim. DO NOT paste raw script lines. Generate a fresh,
+contextual suggestion that advances the conversation in the spirit of the
+playbook.
 
 Output ONLY raw JSON (no markdown, no prose, no code fences):
 {"type":"coach"|"ask_next","followup_text":<str>,"source_chunk_ids":[],"confidence":<0..1>,"rationale":<short>}
 
-Rules:
-- Suggest a single thing the rep should say or ask next. ≤25 words.
-- Use the workspace script block as the primary source for content and tone.
-- OPENER → warm intro that sets the agenda.
-- QUALIFICATION / DISCOVERY → next probing question to surface needs.
-- DEMO → value statement that fits the prospect's stated context.
-- CLOSING → next-step ask (booked meeting, contract, intro to decision-maker).
-- source_chunk_ids stays empty — proactive prompts are script-grounded only.
-- No marketing language. Plain conversational English.
-- Output raw JSON only. No text before or after.`;
+How to think:
+1. Read the recent turns. Identify what stage of the call we're in and what
+   the rep + prospect have already covered.
+2. Read the playbook. Understand its sequencing logic (e.g. rapport →
+   isolate → reframe → close, or discovery questions in order of priority).
+3. Decide the SINGLE NEXT MOVE that fits where this conversation actually
+   is right now — not where the script says it should be at line N.
+4. Phrase it in natural conversational English the rep can actually say.
+
+Hard rules:
+- ≤25 words.
+- Adapt to what was already said. If the rep covered "rapport", move to
+  the next playbook step. If the prospect raised a concern, address it
+  using the playbook's reframe pattern, not a generic line.
+- Never repeat or paraphrase a recently-suggested prompt (you'll see them
+  in the user message — pick a DIFFERENT angle).
+- Never echo back what the rep just said.
+- Replace any {{placeholder}} tokens with neutral conversational filler.
+- source_chunk_ids stays empty — proactive prompts are playbook-grounded.
+- No marketing language. No "I'd like to..." filler. Talk like a coach
+  whispering in the rep's ear.
+
+Output raw JSON only. No text before or after.`;
 
 const ProactiveSchema = z.object({
   type: z.enum(['coach', 'ask_next']),
@@ -476,8 +506,8 @@ export async function proactiveCoach(
           .map((s, i) => `${i + 1}. ${s}`)
           .join('\n')}`
       : null,
-    `Workspace script for stage=${input.stage}:\n${scriptBody}`,
-    `IMPORTANT: replace any {{placeholder}} tokens with natural conversational filler (e.g. {{Name}} → "there"). Never output a curly-brace placeholder verbatim. If every script line for this stage has already been suggested, output a brief follow-up question that advances the conversation instead of repeating.`,
+    `Workspace playbook (stage=${input.stage}) — internalize the methodology, sequencing and tone. DO NOT quote verbatim. Generate a fresh contextual line in the playbook's spirit:\n${scriptBody}`,
+    `IMPORTANT: replace any {{placeholder}} tokens with natural conversational filler. Never output curly-brace placeholders. Adapt the next move to what was actually said in the recent turns above — not to the playbook's literal sequence.`,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -688,7 +718,7 @@ export async function coachAndPersist(
         : null,
       `Intent: categories=${intent.categories.join(',')} stage=${intent.stageSignal} urgency=${intent.urgencyScore.toFixed(2)}`,
       scriptBody
-        ? `Workspace script (stage=${intent.stageSignal}, treat as guidance only — never cite as a chunk):\n${scriptBody}`
+        ? `Workspace playbook for stage=${intent.stageSignal} (METHODOLOGY — internalize the pattern and adapt to the prospect's actual words; DO NOT quote verbatim; never cite as a chunk):\n${scriptBody}`
         : null,
       `Approved chunks (use the UUID after "CHUNK_ID:" in source_chunk_ids — never the bracket number):\n\n${chunks
         .map((c, i) => `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text}`)
