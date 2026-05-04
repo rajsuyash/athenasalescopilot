@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { UserButton } from '@clerk/nextjs';
 
 export interface ShellProps {
   email?: string | null;
@@ -22,12 +23,8 @@ export function Shell({ email, workspace, children }: ShellProps) {
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-white/50">
             {workspace ? <span>{workspace}</span> : null}
-            {email ? <span>{email}</span> : null}
-            <form action="/api/auth/logout" method="post">
-              <button className="rounded px-2 py-1 hover:bg-white/5" type="submit">
-                Sign out
-              </button>
-            </form>
+            {email ? <span className="hidden sm:inline">{email}</span> : null}
+            <UserButton />
           </div>
         </div>
       </header>

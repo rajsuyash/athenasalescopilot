@@ -1,24 +1,21 @@
 /**
- * Server-side fetcher to backend services. Reads the session cookie on each
- * call and attaches the access token. Never invoked from client components.
+ * Server-side fetcher to backend services. After Block T, identity is owned
+ * by Clerk: we ask Clerk for a fresh JWT on every call (Clerk handles
+ * rotation internally) and forward it as the Bearer token. The backend
+ * services verify these JWTs against Clerk's JWKS.
  *
- * 401 handling: tries one refresh against /v1/auth/refresh using the cookie's
- * refresh token. If refresh succeeds, the new tokens are persisted to the
- * cookie and the original call retries once. If refresh fails (refresh token
- * also expired/revoked), the cookie is cleared so the redirect to /signin is
- * NOT followed by /signin bouncing the user back to /dashboard.
+ * No more refresh-token bookkeeping. Clerk's session is rotated client-side
+ * by their middleware; expired tokens auto-redirect to /signin via the same
+ * middleware before requests reach this code.
  */
-import { clearSession, getSession, setSession } from './session';
-import { serverEnv } from './env';
+import { auth } from '@clerk/nextjs/server';
 
 interface CallOpts {
   baseUrl: string;
   path: string;
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
-  /** Auth defaults to required. */
   auth?: 'required' | 'none';
-  /** When true, returns null on 401 instead of throwing. */
   swallow401?: boolean;
 }
 
@@ -34,59 +31,13 @@ export class ApiError extends Error {
   }
 }
 
-interface RefreshResp {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: string;
+async function getBearer(): Promise<string | null> {
+  const a = await auth();
+  if (!a.userId) return null;
+  return a.getToken();
 }
 
-let inFlightRefresh: Promise<RefreshResp | null> | null = null;
-
-/**
- * Hit /v1/auth/refresh with the current cookie's refresh token. Updates the
- * session cookie on success. Coalesces concurrent calls so a flurry of 401s
- * inside one request only refreshes once.
- */
-async function refreshSession(): Promise<RefreshResp | null> {
-  if (inFlightRefresh) return inFlightRefresh;
-  inFlightRefresh = (async () => {
-    const session = await getSession();
-    if (!session?.refreshToken) return null;
-    try {
-      const env = serverEnv();
-      const r = await fetch(`${env.apiUrl}/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ refreshToken: session.refreshToken }),
-        cache: 'no-store',
-      });
-      if (!r.ok) {
-        // Refresh failed → cookie is dead. Clear it so /signin doesn't
-        // redirect-loop the user back to /dashboard.
-        await clearSession();
-        return null;
-      }
-      const body = (await r.json()) as RefreshResp;
-      await setSession({
-        accessToken: body.accessToken,
-        refreshToken: body.refreshToken,
-        expiresAt: body.expiresAt,
-        workspaceId: session.workspaceId,
-      });
-      return body;
-    } catch {
-      return null;
-    } finally {
-      inFlightRefresh = null;
-    }
-  })();
-  return inFlightRefresh;
-}
-
-async function doFetch(
-  opts: CallOpts,
-  bearer: string | null,
-): Promise<Response> {
+async function doFetch(opts: CallOpts, bearer: string | null): Promise<Response> {
   const headers: Record<string, string> = {
     accept: 'application/json',
     'content-type': 'application/json',
@@ -103,22 +54,10 @@ async function doFetch(
 export async function callBackend<T = unknown>(opts: CallOpts): Promise<T> {
   let bearer: string | null = null;
   if (opts.auth !== 'none') {
-    const session = await getSession();
-    if (!session) throw new ApiError(401, 'UNAUTHENTICATED', 'no session');
-    bearer = session.accessToken;
+    bearer = await getBearer();
+    if (!bearer) throw new ApiError(401, 'UNAUTHENTICATED', 'no session');
   }
-  let res = await doFetch(opts, bearer);
-
-  // Auto-refresh on 401: one retry with a fresh access token. If refresh
-  // itself fails, the cookie has been cleared inside refreshSession() so the
-  // resulting 401 we surface here will route the user to /signin without a
-  // redirect loop.
-  if (res.status === 401 && opts.auth !== 'none') {
-    const refreshed = await refreshSession();
-    if (refreshed) {
-      res = await doFetch(opts, refreshed.accessToken);
-    }
-  }
+  const res = await doFetch(opts, bearer);
 
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -144,33 +83,21 @@ export async function callBackend<T = unknown>(opts: CallOpts): Promise<T> {
 }
 
 /**
- * Forward an upload (multipart) request from a Next.js route to the knowledge
- * service. We re-bundle the FormData rather than streaming because Node 18+
- * fetch handles `FormData` natively and the upload size cap is 50 MB.
+ * Forward a multipart upload from a Next.js route to a backend service.
+ * Streams the body straight through — never buffers in admin-web.
  */
 export async function forwardUpload(
   baseUrl: string,
   path: string,
   form: FormData,
 ): Promise<Response> {
-  const session = await getSession();
-  if (!session) {
+  const bearer = await getBearer();
+  if (!bearer) {
     return new Response(JSON.stringify({ error: 'UNAUTHENTICATED' }), { status: 401 });
   }
-  let res = await fetch(`${baseUrl}${path}`, {
+  return fetch(`${baseUrl}${path}`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${session.accessToken}` },
+    headers: { authorization: `Bearer ${bearer}` },
     body: form,
   });
-  if (res.status === 401) {
-    const refreshed = await refreshSession();
-    if (refreshed) {
-      res = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${refreshed.accessToken}` },
-        body: form,
-      });
-    }
-  }
-  return res;
 }

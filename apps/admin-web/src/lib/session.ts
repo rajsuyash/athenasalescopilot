@@ -1,48 +1,26 @@
 /**
- * httpOnly session cookie helpers. The cookie holds the access + refresh
- * tokens issued by the api service. Never written to localStorage and never
- * exposed to client-side JS — every authenticated call goes through a Next.js
- * route handler that reads the cookie server-side and forwards a Bearer token.
+ * Session helper — Clerk owns identity. We expose a thin getSession() that
+ * returns Clerk's session token plus the userId. Existing pages that called
+ * getSession() to gate access keep working with no signature changes.
+ *
+ * setSession / clearSession are removed — Clerk's middleware sets and
+ * clears the cookie on /signin, /signup, and /sign-out flows automatically.
  */
-import { cookies } from 'next/headers';
-
-const COOKIE_NAME = 'athena_session';
-const ACCESS_TTL_SECONDS = 60 * 60 * 24 * 7; // 7d (refresh token TTL); access auto-rotates
+import { auth } from '@clerk/nextjs/server';
 
 export interface SessionData {
+  /** Short-lived JWT signed by Clerk. Pass as Bearer to backend services
+   *  that have the @clerk/backend verifier wired up. */
   accessToken: string;
-  refreshToken: string;
-  workspaceId: string;
-  expiresAt: string;
+  /** Stable Clerk user id (e.g. user_2abc...). */
+  userId: string;
 }
 
 export async function getSession(): Promise<SessionData | null> {
-  const jar = await cookies();
-  const raw = jar.get(COOKIE_NAME)?.value;
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as SessionData;
-    if (!parsed.accessToken || !parsed.workspaceId) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-export async function setSession(data: SessionData): Promise<void> {
-  const jar = await cookies();
-  jar.set({
-    name: COOKIE_NAME,
-    value: JSON.stringify(data),
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    path: '/',
-    maxAge: ACCESS_TTL_SECONDS,
-  });
-}
-
-export async function clearSession(): Promise<void> {
-  const jar = await cookies();
-  jar.set({ name: COOKIE_NAME, value: '', maxAge: 0, path: '/' });
+  const a = await auth();
+  if (!a.userId) return null;
+  // Clerk JWT — backend services verify against Clerk's JWKS.
+  const token = await a.getToken();
+  if (!token) return null;
+  return { accessToken: token, userId: a.userId };
 }

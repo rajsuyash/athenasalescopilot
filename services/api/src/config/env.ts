@@ -31,6 +31,13 @@ const Schema = z.object({
     .default('http://localhost:3000')
     .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
 
+  /** Block T — Clerk identity provider. Optional in dev so the api still
+   *  boots without a key; routes that need Clerk verification fall back
+   *  to legacy HMAC tokens when missing. */
+  CLERK_SECRET_KEY: z.string().optional(),
+  /** Webhook signing secret from Clerk dashboard → Webhooks. */
+  CLERK_WEBHOOK_SECRET: z.string().optional(),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { UserProfile } from '@clerk/nextjs';
 import { ApiError, callBackend } from '@/lib/api';
 import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/session';
@@ -43,22 +44,38 @@ export default async function SettingsPage() {
 
   return (
     <Shell email={me.user.email} workspace={me.workspace.name}>
-      <h1 className="text-2xl font-semibold tracking-tight mb-1">Settings</h1>
-      <p className="text-sm text-white/50 mb-8">
-        Workspace retention policy. Defaults follow PRD §7 — transcripts 30 days,
-        raw audio not retained, summaries 365 days, audit 365 days.
-      </p>
+      <h1 className="text-2xl font-semibold tracking-tight mb-6">Settings</h1>
 
-      {!canEdit ? (
-        <div className="rounded bg-yellow-500/10 text-yellow-300 text-sm p-3 mb-4">
-          You're signed in as <code>{me.role}</code>. Only <code>owner</code> or{' '}
-          <code>admin</code> can change retention.
-        </div>
-      ) : null}
+      <section className="mb-10">
+        <h2 className="text-lg font-medium mb-3">Profile &amp; security</h2>
+        <p className="text-sm text-white/50 mb-4 max-w-2xl">
+          Manage your name, email, password, two-factor auth, connected
+          accounts (Google / Microsoft), active sessions, and account
+          deletion.
+        </p>
+        <UserProfile routing="hash" />
+      </section>
 
-      <RetentionForm initial={retention} />
-      {canEdit ? <EnforceButton /> : null}
-      <BillingCard canEdit={me.role === 'owner'} />
+      <section className="mb-10">
+        <h2 className="text-lg font-medium mb-1">Workspace retention</h2>
+        <p className="text-sm text-white/50 mb-3 max-w-2xl">
+          PRD §7 defaults — transcripts 30 days, raw audio not retained,
+          summaries 365 days, audit 365 days.
+        </p>
+        {!canEdit ? (
+          <div className="rounded bg-yellow-500/10 text-yellow-300 text-sm p-3 mb-4">
+            You&apos;re signed in as <code>{me.role}</code>. Only <code>owner</code> or{' '}
+            <code>admin</code> can change retention.
+          </div>
+        ) : null}
+        <RetentionForm initial={retention} />
+        {canEdit ? <EnforceButton /> : null}
+      </section>
+
+      <section>
+        <h2 className="text-lg font-medium mb-3">Billing</h2>
+        <BillingCard canEdit={me.role === 'owner'} />
+      </section>
     </Shell>
   );
 }

@@ -4,12 +4,14 @@ import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { loadEnv } from './config/env.js';
+import { configureClerk } from './lib/clerk.js';
 import { initPubSub, shutdownPubSub } from './lib/pubsub.js';
 import { attachSentryHandler, initSentry } from './lib/sentry.js';
 import { authPlugin } from './plugins/auth.js';
 import { errorHandlerPlugin } from './plugins/error-handler.js';
 import { auditRoutes } from './modules/audit/routes.js';
 import { authRoutes } from './modules/auth/routes.js';
+import { clerkWebhookRoutes } from './modules/auth/clerk-webhook.js';
 import { healthRoutes } from './modules/health/routes.js';
 import { meetingRoutes } from './modules/meetings/routes.js';
 import { membershipRoutes } from './modules/memberships/routes.js';
@@ -23,6 +25,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   const env = loadEnv();
   initPubSub(env.REDIS_URL);
   initSentry(env.SENTRY_DSN, env.SENTRY_ENVIRONMENT ?? env.NODE_ENV);
+  // Block T — configure Clerk verifier. When the secret is absent (dev
+  // before env var lands), Clerk verification is skipped and only legacy
+  // HMAC tokens work.
+  if (env.CLERK_SECRET_KEY) {
+    configureClerk({ secretKey: env.CLERK_SECRET_KEY });
+  }
 
   const app = Fastify({
     logger:
@@ -67,6 +75,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(healthRoutes);
   await app.register(
     authRoutes({ refreshSecret: env.JWT_REFRESH_SECRET, knowledgeUrl: env.KNOWLEDGE_URL }),
+    { prefix: '/v1' },
+  );
+  await app.register(
+    clerkWebhookRoutes({ webhookSecret: env.CLERK_WEBHOOK_SECRET ?? '' }),
     { prefix: '/v1' },
   );
   await app.register(workspaceRoutes, { prefix: '/v1' });
