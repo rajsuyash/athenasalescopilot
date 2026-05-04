@@ -146,10 +146,44 @@ export function MeetingDetail({
     return m;
   }, [suggestions]);
 
+  // Proactive coach prompts (Block N) synthesize a Turn with startMs=0, so
+  // they don't line up with any real transcript segment. Render those, plus
+  // any other orphans, in a dedicated pane above the transcript so they
+  // don't disappear from the UI.
+  const orphanSuggestions = useMemo(() => {
+    const segmentStarts = new Set(segments.map((seg) => seg.startMs));
+    return suggestions
+      .filter((s) => !segmentStarts.has(s.turnStartMs))
+      .sort(
+        (a, b) =>
+          new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime(),
+      );
+  }, [segments, suggestions]);
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       {/* Transcript timeline */}
       <section className="lg:col-span-2">
+        {orphanSuggestions.length > 0 ? (
+          <div className="mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="font-medium">Coach prompts</h2>
+              <span className="text-xs text-white/40">
+                {orphanSuggestions.length} proactive · script-grounded
+              </span>
+            </div>
+            <div className="rounded-lg border border-white/5 bg-ink-800/40 p-3 space-y-2 max-h-[280px] overflow-y-auto">
+              {orphanSuggestions.map((s) => (
+                <SuggestionInline
+                  key={s.id}
+                  s={s}
+                  onFeedback={submitFeedback}
+                  canFlag={canFlag}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-medium">Transcript</h2>
           <span className="text-xs text-white/40">
