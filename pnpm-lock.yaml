@@ -144,6 +144,12 @@ importers:
 
   packages/sdk/llm:
     dependencies:
+      '@types/adm-zip':
+        specifier: ^0.5.8
+        version: 0.5.8
+      adm-zip:
+        specifier: ^0.5.17
+        version: 0.5.17
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -1485,6 +1491,9 @@ packages:
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
 
+  '@types/adm-zip@0.5.8':
+    resolution: {integrity: sha512-RVVH7QvZYbN+ihqZ4kX/dMiowf6o+Jk1fNwiSdx0NahBJLU787zkULhGhJM8mf/obmLGmgdMM0bXsQTmyfbR7Q==}
+
   '@types/chrome@0.0.279':
     resolution: {integrity: sha512-wl0IxQ2OQiMazPZM5LimHQ7Jwd72/O8UvvzyptplXT2S4eUqXH5C0n8S+v8PtKhyX89p0igCPpNy3Bwksyk57g==}
 
@@ -1551,6 +1560,10 @@ packages:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  adm-zip@0.5.17:
+    resolution: {integrity: sha512-+Ut8d9LLqwEvHHJl1+PIHqoyDxFgVN847JTVM3Izi3xHDWPE4UtzzXysMZQs64DMcrJfBeS/uoEP4AD3HQHnQQ==}
+    engines: {node: '>=12.0'}
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
@@ -3388,6 +3401,10 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
+  '@types/adm-zip@0.5.8':
+    dependencies:
+      '@types/node': 20.19.39
+
   '@types/chrome@0.0.279':
     dependencies:
       '@types/filesystem': 0.0.36
@@ -3462,6 +3479,8 @@ snapshots:
       acorn: 8.16.0
 
   acorn@8.16.0: {}
+
+  adm-zip@0.5.17: {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:

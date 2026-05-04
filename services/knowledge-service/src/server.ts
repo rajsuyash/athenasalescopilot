@@ -31,7 +31,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   // 503 when a skill is missing.
   try {
     const r = initSkills(skillsDir);
-    app.log.info({ skillsDir, ...r }, 'skills loaded');
+    app.log.info({ skillsDir, loaded: r.loaded, skipped: r.skipped }, 'skills loaded');
+    if (r.loaded.length === 0) {
+      app.log.error({ skillsDir, skipped: r.skipped }, 'NO SKILLS LOADED — BMC routes will fail');
+    }
   } catch (err) {
     app.log.warn({ err }, 'skills failed to load — BMC routes will 503 until fixed');
   }

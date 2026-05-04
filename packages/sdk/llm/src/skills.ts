@@ -1,18 +1,15 @@
 /**
  * Anthropic Skill bundle loader.
  *
- * Athena ships a few `.skill` bundles in-tree (athena/skills/). Each bundle
- * is a zip containing SKILL.md + optional references/*.md. At service boot,
- * `initSkills(dir)` extracts every bundle once and caches the prepared
- * system-prompt-ready string in memory. Consumers call `loadSkill(name)`
- * to get that string and prepend it to their LLM messages array.
- *
- * We deliberately avoid adding a zip dependency — uses the system `unzip`
- * binary (present on every Linux container and macOS dev machine).
+ * Athena ships a few `.skill` bundles in-tree (packages/skills/bundles/).
+ * Each bundle is a zip containing SKILL.md + optional references/*.md.
+ * At service boot, `initSkills(dir)` reads every bundle's contents
+ * directly via adm-zip (pure JS, no system unzip dependency — Railway's
+ * Node container doesn't ship unzip). Caches the prepared
+ * system-prompt-ready string in memory.
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import AdmZip from 'adm-zip';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface LoadedSkill {
@@ -30,77 +27,34 @@ let initialized = false;
  *  this are loaded but a warning is logged. ~30 KB → roughly 7-8k tokens. */
 const SKILL_BYTE_BUDGET = 30_000;
 
-/** Read a single .skill bundle into a system-prompt-ready string. */
+/** Read a single .skill bundle (zip) into a system-prompt-ready string. */
 function readSkillBundle(bundlePath: string): LoadedSkill | null {
   if (!existsSync(bundlePath)) return null;
-  const tmpDir = mkdtempSync(join(tmpdir(), 'athena-skill-'));
-  try {
-    execFileSync('unzip', ['-q', '-o', bundlePath, '-d', tmpDir], { stdio: 'pipe' });
-  } catch (err) {
-    rmSync(tmpDir, { recursive: true, force: true });
-    throw new Error(
-      `failed to unzip skill bundle ${bundlePath}: ${err instanceof Error ? err.message : 'unknown'}`,
-    );
-  }
-  try {
-    // Skill bundles wrap the skill folder inside the zip — find the
-    // SKILL.md anywhere up to depth 3.
-    const skillMd = findFile(tmpDir, 'SKILL.md', 3);
-    if (!skillMd) return null;
-    const skillRoot = skillMd.replace(/\/SKILL\.md$/, '');
-    const refs = readReferenceFiles(skillRoot);
-    const body = [
-      readFileSync(skillMd, 'utf8').trim(),
-      refs.length > 0
-        ? `\n\n---\n\n## Reference materials (provided to the skill)\n\n${refs.join('\n\n---\n\n')}`
-        : '',
-    ].join('');
-    const name = nameFromBundlePath(bundlePath);
-    return { name, body, bytes: Buffer.byteLength(body, 'utf8') };
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
-}
+  const zip = new AdmZip(bundlePath);
+  const entries = zip.getEntries();
+  if (entries.length === 0) return null;
 
-function findFile(root: string, target: string, maxDepth: number): string | null {
-  const stack: Array<{ path: string; depth: number }> = [{ path: root, depth: 0 }];
-  while (stack.length > 0) {
-    const { path, depth } = stack.pop() as { path: string; depth: number };
-    let entries: string[];
-    try {
-      entries = readdirSync(path);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = join(path, entry);
-      let s;
-      try {
-        s = statSync(full);
-      } catch {
-        continue;
-      }
-      if (s.isFile() && entry === target) return full;
-      if (s.isDirectory() && depth < maxDepth) stack.push({ path: full, depth: depth + 1 });
-    }
-  }
-  return null;
-}
+  // Skill bundles wrap the skill folder inside the zip — locate SKILL.md
+  // anywhere in the tree (typically <name>/SKILL.md).
+  const skillEntry = entries.find((e) => e.entryName.toLowerCase().endsWith('/skill.md') || e.entryName.toLowerCase() === 'skill.md');
+  if (!skillEntry) return null;
 
-function readReferenceFiles(skillRoot: string): string[] {
-  const refsDir = join(skillRoot, 'references');
-  if (!existsSync(refsDir)) return [];
-  const out: string[] = [];
-  for (const entry of readdirSync(refsDir).sort()) {
-    if (!entry.endsWith('.md')) continue;
-    const full = join(refsDir, entry);
-    try {
-      out.push(`### ${entry}\n\n${readFileSync(full, 'utf8').trim()}`);
-    } catch {
-      // ignore unreadable refs
-    }
-  }
-  return out;
+  const skillBody = skillEntry.getData().toString('utf8').trim();
+  const skillDir = skillEntry.entryName.replace(/SKILL\.md$/i, '');
+  const referencesPrefix = `${skillDir}references/`;
+  const refs = entries
+    .filter((e) => !e.isDirectory && e.entryName.startsWith(referencesPrefix) && e.entryName.toLowerCase().endsWith('.md'))
+    .sort((a, b) => a.entryName.localeCompare(b.entryName))
+    .map((e) => `### ${e.entryName.slice(referencesPrefix.length)}\n\n${e.getData().toString('utf8').trim()}`);
+
+  const body = [
+    skillBody,
+    refs.length > 0
+      ? `\n\n---\n\n## Reference materials (provided to the skill)\n\n${refs.join('\n\n---\n\n')}`
+      : '',
+  ].join('');
+  const name = nameFromBundlePath(bundlePath);
+  return { name, body, bytes: Buffer.byteLength(body, 'utf8') };
 }
 
 function nameFromBundlePath(bundlePath: string): string {
