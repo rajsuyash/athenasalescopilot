@@ -6,7 +6,13 @@ import { prisma } from '@athena/db';
 import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import type { LlmClient } from '@athena/sdk-llm';
 import type { SttClient, SttSegment, SttStream } from '@athena/sdk-stt';
-import { coachAndPersist } from '../../lib/coach.js';
+import {
+  coachAndPersist,
+  detectStage,
+  proactiveCoach,
+  PROACTIVE_STAGES,
+  type ProactiveTrigger,
+} from '../../lib/coach.js';
 import { verifyWsToken } from '../../lib/auth.js';
 import { emitLatency } from '../../lib/latency.js';
 import { endMeeting, runRecap } from '../../lib/postcall.js';
@@ -124,6 +130,21 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       let pending: { customerText: string; turnId: string } | null = null;
       const log = req.log.child({ sessionId, workspaceId: claims.workspaceId });
 
+      // ─── Proactive script-driven coaching state ───────────────────────────
+      // Set when the client's `hello` lands. The proactive ticker fires opening
+      // prompts ~3s after capture starts, and silence prompts when the rep
+      // hasn't spoken in 12s during opening/qualification/discovery stages.
+      let captureStartedAt = 0;
+      let lastRepFinalAt = 0;
+      let lastSuggestionAt = 0;
+      let openingFired = false;
+      let currentStage = 'opener';
+      let proactiveTick: ReturnType<typeof setInterval> | null = null;
+
+      const PROACTIVE_THROTTLE_MS = 8_000;
+      const REP_SILENCE_MS = 12_000;
+      const OPENING_DELAY_MS = 3_000;
+
       const idle = setInterval(() => {
         if (Date.now() - lastFrameAt > deps.idleTimeoutMs) {
           log.warn({ idleMs: Date.now() - lastFrameAt }, 'idle timeout');
@@ -136,6 +157,10 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         if (shuttingDown) return;
         shuttingDown = true;
         clearInterval(idle);
+        if (proactiveTick) {
+          clearInterval(proactiveTick);
+          proactiveTick = null;
+        }
         if (sttStream) {
           void sttStream.close().catch(() => {});
           sttStream = null;
@@ -193,6 +218,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             },
             deps,
           );
+          lastSuggestionAt = Date.now();
           sendJson(socket, { type: 'suggestion.generated', suggestion: r });
         } catch (err) {
           log.error({ err }, 'coach failed');
@@ -204,6 +230,32 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         } finally {
           inflightCoach = false;
           if (pending) void drainPending();
+        }
+      };
+
+      const fireProactive = async (trigger: ProactiveTrigger): Promise<void> => {
+        if (!meetingId || inflightCoach) return;
+        if (!PROACTIVE_STAGES.includes(currentStage)) return;
+        inflightCoach = true;
+        try {
+          const r = await proactiveCoach(
+            {
+              workspaceId: claims.workspaceId,
+              meetingId,
+              stage: currentStage,
+              trigger,
+              contextTurns: rolling.slice(-4),
+            },
+            deps,
+          );
+          if (r) {
+            lastSuggestionAt = Date.now();
+            sendJson(socket, { type: 'suggestion.generated', suggestion: r });
+          }
+        } catch (err) {
+          log.error({ err, trigger, stage: currentStage }, 'proactive coach failed');
+        } finally {
+          inflightCoach = false;
         }
       };
 
@@ -243,9 +295,32 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
         sendJson(socket, { type: 'transcript.final', segment: seg, speaker });
 
-        if (speaker !== 'customer') return;
+        // Track stage transitions on every turn so the proactive ticker fires
+        // the right stage's prompt. The reactive customer-turn path below is
+        // unchanged (objection-handling continues to ground in chunks).
+        const detected = detectStage(seg.text);
+        const stageChanged = detected !== currentStage;
+        if (stageChanged) {
+          const prev = currentStage;
+          currentStage = detected;
+          log.debug({ from: prev, to: detected, speaker }, 'stage transition');
+          // Fire one proactive prompt at the start of every new non-objection
+          // stage so the rep gets a fresh nudge as the call evolves. Throttle
+          // is respected inside the ticker loop (we set lastSuggestionAt below).
+          if (
+            PROACTIVE_STAGES.includes(detected) &&
+            Date.now() - lastSuggestionAt >= PROACTIVE_THROTTLE_MS
+          ) {
+            void fireProactive('stage_transition');
+          }
+        }
 
-        // Create a turn row so the suggestion row can FK to it.
+        if (speaker === 'rep') {
+          lastRepFinalAt = Date.now();
+          return;
+        }
+
+        // Customer turn → reactive coach path (objection handling, grounded).
         const turn = await prisma.turn.create({
           data: {
             meetingId,
@@ -292,6 +367,10 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       socket.on('close', () => {
         log.info('socket closed');
         clearInterval(idle);
+        if (proactiveTick) {
+          clearInterval(proactiveTick);
+          proactiveTick = null;
+        }
         if (sttStream) void sttStream.close().catch(() => {});
         if (meetingId) activeSessions.delete(meetingId);
       });
@@ -364,6 +443,32 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             onFinal,
           });
         }
+
+        // Initialize proactive coaching state. Capture starts now (after the
+        // handshake), and the ticker drives opening prompts + rep-silence
+        // nudges based on the current stage tracker.
+        captureStartedAt = Date.now();
+        lastRepFinalAt = captureStartedAt;
+        proactiveTick = setInterval(() => {
+          if (!meetingId || inflightCoach) return;
+          const now = Date.now();
+          if (now - lastSuggestionAt < PROACTIVE_THROTTLE_MS) return;
+
+          if (!openingFired && now - captureStartedAt >= OPENING_DELAY_MS) {
+            openingFired = true;
+            currentStage = 'opener';
+            void fireProactive('capture_start');
+            return;
+          }
+
+          if (
+            PROACTIVE_STAGES.includes(currentStage) &&
+            currentStage !== 'closing' &&
+            now - lastRepFinalAt >= REP_SILENCE_MS
+          ) {
+            void fireProactive('rep_silence');
+          }
+        }, 2_000);
 
         sendJson(socket, { type: 'ready', sessionId, meetingId });
       };

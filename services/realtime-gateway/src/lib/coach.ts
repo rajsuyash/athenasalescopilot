@@ -326,6 +326,159 @@ export function invalidateScriptCache(workspaceId: string): void {
   scriptCache.delete(workspaceId);
 }
 
+// ─── Proactive script-driven coaching ──────────────────────────────────────
+//
+// Reactive `coachAndPersist` only fires after a customer turn. For opening,
+// discovery, and rep-silence moments we want to suggest the rep's NEXT line
+// using their published script as the primary source. Proactive output is
+// NEVER grounded in knowledge chunks — it leans entirely on the script block
+// for the current stage. Returns null if no script block is published for
+// this stage (nothing useful to say).
+
+const PROACTIVE_SYSTEM = `You are a sales-call copilot suggesting the rep's NEXT line proactively.
+
+Output ONLY raw JSON (no markdown, no prose, no code fences):
+{"type":"coach"|"ask_next","followup_text":<str>,"source_chunk_ids":[],"confidence":<0..1>,"rationale":<short>}
+
+Rules:
+- Suggest a single thing the rep should say or ask next. ≤25 words.
+- Use the workspace script block as the primary source for content and tone.
+- OPENER → warm intro that sets the agenda.
+- QUALIFICATION / DISCOVERY → next probing question to surface needs.
+- DEMO → value statement that fits the prospect's stated context.
+- CLOSING → next-step ask (booked meeting, contract, intro to decision-maker).
+- source_chunk_ids stays empty — proactive prompts are script-grounded only.
+- No marketing language. Plain conversational English.
+- Output raw JSON only. No text before or after.`;
+
+const ProactiveSchema = z.object({
+  type: z.enum(['coach', 'ask_next']),
+  followup_text: z.string().min(1).max(400),
+  source_chunk_ids: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string(),
+});
+
+export type ProactiveTrigger = 'capture_start' | 'rep_silence' | 'stage_transition';
+
+export interface ProactiveInput {
+  workspaceId: string;
+  meetingId: string;
+  stage: string;
+  trigger: ProactiveTrigger;
+  contextTurns: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>;
+}
+
+/** Returns null when there's no published script block for the stage, when
+ *  no LLM is configured, or when the LLM call fails. Caller should treat null
+ *  as "skip this trigger" rather than retry. */
+export async function proactiveCoach(
+  input: ProactiveInput,
+  deps: CoachDeps,
+): Promise<CoachOutput | null> {
+  if (!deps.llm) return null;
+  const scriptBody = await getActiveScriptForStage(input.workspaceId, input.stage);
+  if (!scriptBody) return null;
+
+  const userPrompt = [
+    `Trigger: ${input.trigger}`,
+    `Current stage: ${input.stage}`,
+    input.contextTurns.length
+      ? `Recent turns:\n${input.contextTurns
+          .slice(-4)
+          .map((t) => `${t.speaker.toUpperCase()}: ${t.text}`)
+          .join('\n')}`
+      : 'No turns yet — call just started.',
+    `Workspace script for stage=${input.stage}:\n${scriptBody}`,
+  ].join('\n\n');
+
+  const r = await deps.llm.complete({
+    workspaceId: input.workspaceId,
+    messages: [
+      { role: 'system', content: PROACTIVE_SYSTEM },
+      { role: 'user', content: userPrompt },
+    ],
+    schema: ProactiveSchema,
+    temperature: 0.3,
+    maxTokens: 200,
+    deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 12000),
+  });
+
+  if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
+    return null;
+  }
+
+  const conf = clamp01(r.parsed.confidence);
+  const stageSignal: StageSignal = (STAGE_SIGNALS as readonly string[]).includes(input.stage)
+    ? (input.stage as StageSignal)
+    : 'discovery';
+
+  // A proactive suggestion still needs a Turn row (Suggestion.turnId is
+  // required). We synthesize a zero-length Turn tagged 'system' so analytics
+  // can distinguish proactive prompts from real customer-turn-triggered ones.
+  const turn = await prisma.turn.create({
+    data: {
+      meetingId: input.meetingId,
+      speakerType: 'system',
+      startMs: 0,
+      endMs: 0,
+    },
+  });
+
+  const row = await prisma.suggestion.create({
+    data: {
+      workspaceId: input.workspaceId,
+      meetingId: input.meetingId,
+      turnId: turn.id,
+      suggestionType: r.parsed.type,
+      answerText: null,
+      followupText: r.parsed.followup_text,
+      confidenceScore: conf,
+      priorityScore: 0.5,
+      sourceChunkIds: [],
+      policyVersion: POLICY_VERSION,
+      rationale: `[proactive:${input.trigger}] ${r.parsed.rationale}`,
+    },
+  });
+
+  return {
+    type: r.parsed.type,
+    answerText: null,
+    followupText: r.parsed.followup_text,
+    confidenceScore: conf,
+    priorityScore: 0.5,
+    sourceChunkIds: [],
+    policyVersion: POLICY_VERSION,
+    rationale: r.parsed.rationale,
+    display: conf >= deps.minDisplayConfidence,
+    intent: {
+      categories: ['none'],
+      stageSignal,
+      urgencyScore: 0.4,
+      confidence: conf,
+      source: 'llm',
+    },
+    sources: [],
+    suggestionId: row.id,
+  };
+}
+
+/** Stable list of stages we will fire proactive prompts for. `objection_handling`
+ *  is excluded because the reactive customer-turn path already covers it. */
+export const PROACTIVE_STAGES: readonly string[] = [
+  'opener',
+  'qualification',
+  'discovery',
+  'demo',
+  'closing',
+];
+
+/** Lightweight stage detector for the gateway's stage state machine. Wraps
+ *  the same heuristic the coach uses so both paths agree on the current stage. */
+export function detectStage(text: string): string {
+  return classifyHeuristic(text).stageSignal;
+}
+
 export type SuggestionType = 'answer' | 'ask_next' | 'coach' | 'risk';
 
 export interface CoachInput {

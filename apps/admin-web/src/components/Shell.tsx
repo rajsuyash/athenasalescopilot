@@ -17,8 +17,7 @@ export function Shell({ email, workspace, children }: ShellProps) {
           </Link>
           <nav className="flex gap-4 text-sm text-white/70">
             <Link href="/dashboard" className="hover:text-white">Dashboard</Link>
-            <Link href="/knowledge" className="hover:text-white">Knowledge</Link>
-            <Link href="/scripts" className="hover:text-white">Scripts</Link>
+            <Link href="/playbooks" className="hover:text-white">Playbooks</Link>
             <Link href="/meetings" className="hover:text-white">Meetings</Link>
             <Link href="/inbox" className="hover:text-white">Inbox</Link>
             <Link href="/analytics" className="hover:text-white">Analytics</Link>
