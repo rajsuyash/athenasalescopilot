@@ -17,7 +17,7 @@ export type RuntimeMessage =
       capturedAt: string;
     }
   | { type: 'popup.query' }
-  | { type: 'settings.save'; settings: ExtensionSettings }
+  | { type: 'settings.save'; prefs: PopupPrefs }
   | { type: 'inbox.markRead'; id: string }
   | { type: 'auth.login'; email: string; password: string; workspaceSlug?: string }
   | { type: 'auth.logout' }
@@ -103,6 +103,40 @@ export interface ActiveMeeting {
   internalMeetingId: string | null;
 }
 
+/**
+ * Sanitized popup view of the current account. Tokens are NEVER returned to
+ * the popup process — the SW owns them. This prevents a compromised
+ * meet.google.com page (which can fire chrome.runtime.sendMessage) from
+ * exfiltrating credentials via popup.query.
+ */
+export interface AccountInfo {
+  isSignedIn: boolean;
+  email: string | null;
+  /** Stable hint for the popup so it can show "session expires in N min". */
+  expiresAt: string | null;
+}
+
+/**
+ * User-controllable preferences. Excludes credentials. Used in both the
+ * popup.query response AND the settings.save request so the wire shape is
+ * symmetric and the popup never has the chance to round-trip a token.
+ */
+export interface PopupPrefs {
+  apiUrl: string;
+  gatewayUrl: string;
+  shipCaptions: boolean;
+  forceCustomer: boolean;
+}
+
+export interface PopupQueryResponse {
+  active: ActiveMeeting | null;
+  account: AccountInfo;
+  prefs: PopupPrefs;
+  captionStats: CaptionStats | null;
+  inbox: InboxNotification[];
+  capture: CaptureStatus | null;
+}
+
 declare const process: { env: { ATHENA_API_URL?: string; ATHENA_GATEWAY_URL?: string } };
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -117,3 +151,35 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 };
 
 export const MEET_RE = /^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:[/?#].*)?$/i;
+
+/**
+ * Allowlist of host:port patterns the extension is permitted to talk to.
+ * Validated on every settings.save AND on the SW startup read so a tampered
+ * chrome.storage entry can't trick signedFetch into hitting an attacker host.
+ *
+ * Bare regex strings — `URL.host` is matched against `^(pattern)$` with one
+ * leading `^` and trailing `$` per entry. Anything not matching falls back
+ * to DEFAULT_SETTINGS at storage-read time.
+ */
+export const ALLOWED_API_HOST_RE = /^(athena-api-production-aa5b\.up\.railway\.app|localhost:\d+|127\.0\.0\.1:\d+)$/;
+export const ALLOWED_GATEWAY_HOST_RE = /^(athena-realtime-production\.up\.railway\.app|localhost:\d+|127\.0\.0\.1:\d+)$/;
+
+export function isAllowedApiUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    return ALLOWED_API_HOST_RE.test(u.host);
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedGatewayUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (!['https:', 'http:', 'wss:', 'ws:'].includes(u.protocol)) return false;
+    return ALLOWED_GATEWAY_HOST_RE.test(u.host);
+  } catch {
+    return false;
+  }
+}

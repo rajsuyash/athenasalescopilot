@@ -22,17 +22,33 @@ export async function buildApp(): Promise<FastifyInstance> {
         : { level: env.LOG_LEVEL },
     requestIdHeader: 'x-request-id',
     genReqId: () => crypto.randomUUID(),
+    // Hard cap on HTTP body — caption-injection batches are the largest
+    // legitimate payload (50 captions × 2KB ≈ 100KB). 256KB leaves headroom.
+    bodyLimit: 256 * 1024,
   });
 
-  // Mirror api/server.ts: admin-web origins + any chrome-extension origin so
-  // the popup can hit /v1/sessions/captions and the offscreen WS can connect.
+  // CORS allow-list. Production accepts ONLY origins enumerated in
+  // CORS_ORIGINS plus the single pinned chrome-extension://<id> for our
+  // published Web Store build (set via EXTENSION_ORIGIN). When that env
+  // var is absent we fall back to the pre-fix behaviour (any
+  // chrome-extension://*) AND log a loud warning. After the Web Store id
+  // is known, set EXTENSION_ORIGIN on Railway to enforce the pin.
   const allowedOrigins = new Set(env.CORS_ORIGINS);
+  if (env.EXTENSION_ORIGIN) allowedOrigins.add(env.EXTENSION_ORIGIN);
+  const isProd = env.NODE_ENV === 'production';
+  const allowAnyExtension = !isProd || !env.EXTENSION_ORIGIN;
+  if (isProd && !env.EXTENSION_ORIGIN) {
+    app.log.warn(
+      'CORS pin: EXTENSION_ORIGIN not set; allowing any chrome-extension://* origin. ' +
+        'Set EXTENSION_ORIGIN=chrome-extension://<published-id> on Railway after the Web Store listing is live.',
+    );
+  }
   await app.register(cors, {
     credentials: true,
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
-      if (origin.startsWith('chrome-extension://')) return cb(null, true);
+      if (allowAnyExtension && origin.startsWith('chrome-extension://')) return cb(null, true);
       return cb(new Error('cors: origin not allowed'), false);
     },
   });
@@ -68,12 +84,19 @@ export async function buildApp(): Promise<FastifyInstance> {
     deepgramModel: env.DEEPGRAM_MODEL,
   });
 
-  app.get('/healthz', async () => ({
-    ok: true,
-    stt: env.STT_PROVIDER,
-    llm: !!llm,
-    deepgram: !!env.DEEPGRAM_API_KEY,
-  }));
+  // Public health probe — minimal surface so unauthenticated callers can't
+  // fingerprint our provider configuration. Detailed diagnostic shape moved
+  // to authenticated `/healthz/details`.
+  app.get('/healthz', async () => ({ ok: true }));
+  app.get('/healthz/details', async (req) => {
+    await req.requireAuth();
+    return {
+      ok: true,
+      stt: env.STT_PROVIDER,
+      llm: !!llm,
+      deepgram: !!env.DEEPGRAM_API_KEY,
+    };
+  });
 
   registerSessionHandler(app, {
     stt,

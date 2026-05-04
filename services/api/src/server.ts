@@ -44,16 +44,31 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(helmet, { contentSecurityPolicy: false });
-  // Allow the configured admin-web origins AND any chrome-extension origin so
-  // the Athena Companion popup can sign in regardless of the per-install ext id.
+  // CORS allow-list. Production accepts ONLY origins enumerated in
+  // CORS_ORIGINS plus the single pinned chrome-extension://<id> for our
+  // published Web Store build (set via EXTENSION_ORIGIN). When
+  // EXTENSION_ORIGIN is not set we fall back to the previous behaviour
+  // (any chrome-extension://*) AND log a loud warning so an operator
+  // notices the gap. Once the published Web Store id is known, set
+  // EXTENSION_ORIGIN on Railway to lock down to that single origin and
+  // shut a malicious sibling extension out of riding our user's session.
   const allowed = new Set(env.CORS_ORIGINS);
+  if (env.EXTENSION_ORIGIN) allowed.add(env.EXTENSION_ORIGIN);
+  const isProd = env.NODE_ENV === 'production';
+  const allowAnyExtension = !isProd || !env.EXTENSION_ORIGIN;
+  if (isProd && !env.EXTENSION_ORIGIN) {
+    app.log.warn(
+      'CORS pin: EXTENSION_ORIGIN not set; allowing any chrome-extension://* origin. ' +
+        'Set EXTENSION_ORIGIN=chrome-extension://<published-id> on Railway after the Web Store listing is live.',
+    );
+  }
   await app.register(cors, {
     credentials: true,
     origin: (origin, cb) => {
       // Same-origin requests (e.g. server-side fetches) have no Origin header.
       if (!origin) return cb(null, true);
       if (allowed.has(origin)) return cb(null, true);
-      if (origin.startsWith('chrome-extension://')) return cb(null, true);
+      if (allowAnyExtension && origin.startsWith('chrome-extension://')) return cb(null, true);
       return cb(new Error('cors: origin not allowed'), false);
     },
   });

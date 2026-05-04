@@ -1,51 +1,49 @@
 /**
- * Popup — pure DOM. Status + settings (token paste + caption shipping toggle).
+ * Popup — pure DOM. Status + sign-in + capture controls.
+ *
+ * Token hygiene: the popup is a privileged context, but it never receives
+ * raw access/refresh tokens. The SW's `popup.query` returns only an
+ * `account` summary (isSignedIn, email, expiresAt) plus a sanitized `prefs`
+ * object. The SW does all signedFetch — popup never touches the bearer.
  */
 import {
-  DEFAULT_SETTINGS,
   type ActiveMeeting,
   type CaptionStats,
   type CaptureStatus,
-  type ExtensionSettings,
+  type AccountInfo,
   type InboxNotification,
+  type PopupPrefs,
+  type PopupQueryResponse,
   type RuntimeMessage,
 } from '../shared/types.js';
 
-interface QueryResponse {
-  active: ActiveMeeting | null;
-  settings: ExtensionSettings;
-  captionStats: CaptionStats | null;
-  inbox: InboxNotification[];
-  capture: CaptureStatus | null;
-}
-
 const root = document.getElementById('root');
 
-async function load(): Promise<QueryResponse> {
+async function load(): Promise<PopupQueryResponse> {
   return (await chrome.runtime.sendMessage({
     type: 'popup.query',
-  } satisfies RuntimeMessage)) as QueryResponse;
+  } satisfies RuntimeMessage)) as PopupQueryResponse;
 }
 
-function isDevBuild(settings: ExtensionSettings): boolean {
-  return /localhost|127\.0\.0\.1/.test(settings.gatewayUrl);
+function isDevBuild(prefs: PopupPrefs): boolean {
+  return /localhost|127\.0\.0\.1/.test(prefs.gatewayUrl);
 }
 
 async function render(): Promise<void> {
   if (!root) return;
-  const { active, settings, captionStats, inbox, capture } = await load();
-  const devMode = isDevBuild(settings);
+  const { active, account, prefs, captionStats, inbox, capture } = await load();
+  const devMode = isDevBuild(prefs);
   root.replaceChildren();
-  root.appendChild(activeCard(active, captionStats, capture, !!settings.accessToken, devMode));
+  root.appendChild(activeCard(active, captionStats, capture, account.isSignedIn, devMode));
   if (inbox.length > 0) root.appendChild(inboxCard(inbox));
-  if (!settings.refreshToken) {
-    root.appendChild(signInCard(settings));
+  if (!account.isSignedIn) {
+    root.appendChild(signInCard(prefs));
   } else {
-    root.appendChild(signedInCard(settings, devMode));
+    root.appendChild(signedInCard(account, prefs, devMode));
   }
   // Endpoints editor is dev-only — paying customers never need to override
   // the production backend URLs.
-  if (devMode) root.appendChild(advancedCard(settings));
+  if (devMode) root.appendChild(advancedCard(prefs));
 }
 
 function inboxCard(items: InboxNotification[]): HTMLElement {
@@ -107,16 +105,12 @@ function activeCard(
   const card = document.createElement('div');
   card.className = 'card stack';
   const title = document.createElement('div');
-  // Avoid innerHTML — store reviewers' static analyzers occasionally flag it
-  // even when the only interpolation is escaped. Build the node tree directly.
   const pill = document.createElement('span');
   pill.className = 'pill';
   pill.textContent = 'DETECTED';
   title.appendChild(pill);
   title.appendChild(document.createTextNode(' ' + (active.title ?? '(untitled)')));
   card.appendChild(title);
-  // Meeting code is engineer signal — useful in dev for support tickets but
-  // adds noise for paying customers.
   if (devMode) {
     const id = document.createElement('div');
     const code = document.createElement('code');
@@ -166,9 +160,6 @@ function activeCard(
   open.type = 'button';
   open.textContent = 'Open in Athena';
   open.addEventListener('click', () => {
-    // Routes through SW handler that picks the right admin-web host and
-    // resolves the workspace meeting UUID. Same path the in-Meet panel
-    // footer uses, so behavior stays consistent across surfaces.
     void chrome.runtime
       .sendMessage({ type: 'panel.openInAthena' })
       .catch(() => undefined);
@@ -176,10 +167,6 @@ function activeCard(
   buttons.appendChild(open);
   card.appendChild(buttons);
 
-  // Primary path for paying customers: real-time Meet tab-audio capture →
-  // gateway WS → Deepgram STT → coach. Replaces the caption-DOM scraper
-  // (which is fragile to Meet UI revisions) with the same proven audio path
-  // the CLI uses.
   const cap = document.createElement('button');
   cap.className = capturing ? 'btn btn-secondary' : 'btn';
   cap.style.marginTop = '6px';
@@ -191,10 +178,6 @@ function activeCard(
     cap.addEventListener('click', async () => {
       cap.disabled = true;
       cap.textContent = capturing ? 'Stopping…' : 'Starting…';
-      // Mic probe is best-effort — popup windows auto-dismiss prompts when
-      // they lose focus, so we don't block capture on it. Customer audio
-      // (tabCapture) flows regardless. Rep voice mixing requires the
-      // dedicated permission page (see "Grant mic permission" below).
       if (!capturing) {
         try {
           const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -216,9 +199,6 @@ function activeCard(
   }
   card.appendChild(cap);
 
-  // Mic-permission helper. Popup windows can't reliably show getUserMedia
-  // prompts (they auto-dismiss on focus loss), so we hand off to a real
-  // extension tab where the prompt sticks. Once granted, offscreen reuses it.
   if (signedIn) {
     const grant = document.createElement('button');
     grant.className = 'btn btn-secondary';
@@ -231,8 +211,6 @@ function activeCard(
     card.appendChild(grant);
   }
 
-  // Demo path is dev-only — shipping canned objections to confirm the coach
-  // pipeline end-to-end. Confuses paying customers; gate behind localhost.
   if (devMode) {
     const demo = document.createElement('button');
     demo.className = 'btn btn-secondary';
@@ -257,7 +235,7 @@ function activeCard(
   return card;
 }
 
-function signInCard(initial: ExtensionSettings): HTMLElement {
+function signInCard(initialPrefs: PopupPrefs): HTMLElement {
   const card = document.createElement('div');
   card.className = 'card stack';
   const heading = document.createElement('div');
@@ -271,7 +249,7 @@ function signInCard(initial: ExtensionSettings): HTMLElement {
     'Sign in once with your Athena email + password. The extension will keep itself signed in and ship captions automatically.';
   card.appendChild(help);
 
-  const email = labeledInput('Email', initial.userEmail ?? '', 'email');
+  const email = labeledInput('Email', '', 'email');
   card.appendChild(email.wrap);
   const password = labeledInput('Password', '', 'password');
   card.appendChild(password.wrap);
@@ -283,7 +261,7 @@ function signInCard(initial: ExtensionSettings): HTMLElement {
   ship.style.fontSize = '11px';
   const cb = document.createElement('input');
   cb.type = 'checkbox';
-  cb.checked = initial.shipCaptions;
+  cb.checked = initialPrefs.shipCaptions;
   ship.appendChild(cb);
   ship.appendChild(document.createTextNode(' Ship Meet captions while signed in'));
   card.appendChild(ship);
@@ -307,14 +285,10 @@ function signInCard(initial: ExtensionSettings): HTMLElement {
     }
     submit.textContent = 'Signing in…';
     submit.disabled = true;
-    // Persist shipCaptions toggle alongside the login (so the ship pref is
-    // captured even when the user changes nothing else).
+    // Persist shipCaptions toggle alongside the login.
     await chrome.runtime.sendMessage({
       type: 'settings.save',
-      settings: {
-        ...initial,
-        shipCaptions: cb.checked,
-      },
+      prefs: { ...initialPrefs, shipCaptions: cb.checked },
     } satisfies RuntimeMessage);
     const resp = (await chrome.runtime.sendMessage({
       type: 'auth.login',
@@ -334,7 +308,7 @@ function signInCard(initial: ExtensionSettings): HTMLElement {
   return card;
 }
 
-function signedInCard(initial: ExtensionSettings, devMode: boolean): HTMLElement {
+function signedInCard(account: AccountInfo, initialPrefs: PopupPrefs, devMode: boolean): HTMLElement {
   const card = document.createElement('div');
   card.className = 'card stack';
   const heading = document.createElement('div');
@@ -344,14 +318,12 @@ function signedInCard(initial: ExtensionSettings, devMode: boolean): HTMLElement
   const who = document.createElement('div');
   who.className = 'muted';
   who.style.fontSize = '11px';
-  who.textContent = initial.userEmail ? `as ${initial.userEmail}` : '';
+  who.textContent = account.email ? `as ${account.email}` : '';
   card.appendChild(who);
 
-  // Solo-test mode flips the gateway's diarization to classify every turn
-  // as customer so the coach fires during single-person dev tests. Dev-only.
   const soloCb = document.createElement('input');
   soloCb.type = 'checkbox';
-  soloCb.checked = initial.forceCustomer === true;
+  soloCb.checked = initialPrefs.forceCustomer === true;
   if (devMode) {
     const solo = document.createElement('label');
     solo.className = 'row';
@@ -365,7 +337,6 @@ function signedInCard(initial: ExtensionSettings, devMode: boolean): HTMLElement
   const row = document.createElement('div');
   row.className = 'row';
   row.style.gap = '6px';
-  // Save button only meaningful when there's a dev-mode toggle to persist.
   if (devMode) {
     const save = document.createElement('button');
     save.className = 'btn';
@@ -374,7 +345,7 @@ function signedInCard(initial: ExtensionSettings, devMode: boolean): HTMLElement
       save.textContent = 'Saving…';
       await chrome.runtime.sendMessage({
         type: 'settings.save',
-        settings: { ...initial, forceCustomer: soloCb.checked },
+        prefs: { ...initialPrefs, forceCustomer: soloCb.checked },
       } satisfies RuntimeMessage);
       save.textContent = 'Saved';
       setTimeout(() => (save.textContent = 'Save'), 1200);
@@ -394,7 +365,7 @@ function signedInCard(initial: ExtensionSettings, devMode: boolean): HTMLElement
   return card;
 }
 
-function advancedCard(initial: ExtensionSettings): HTMLElement {
+function advancedCard(initialPrefs: PopupPrefs): HTMLElement {
   const wrap = document.createElement('details');
   wrap.className = 'card stack';
   const summary = document.createElement('summary');
@@ -404,9 +375,9 @@ function advancedCard(initial: ExtensionSettings): HTMLElement {
   summary.textContent = 'Advanced — endpoints';
   wrap.appendChild(summary);
 
-  const apiUrl = labeledInput('API URL', initial.apiUrl);
+  const apiUrl = labeledInput('API URL', initialPrefs.apiUrl);
   wrap.appendChild(apiUrl.wrap);
-  const gatewayUrl = labeledInput('Gateway URL', initial.gatewayUrl);
+  const gatewayUrl = labeledInput('Gateway URL', initialPrefs.gatewayUrl);
   wrap.appendChild(gatewayUrl.wrap);
 
   const save = document.createElement('button');
@@ -416,10 +387,10 @@ function advancedCard(initial: ExtensionSettings): HTMLElement {
     save.textContent = 'Saving…';
     await chrome.runtime.sendMessage({
       type: 'settings.save',
-      settings: {
-        ...initial,
-        apiUrl: (apiUrl.input.value || DEFAULT_SETTINGS.apiUrl).trim(),
-        gatewayUrl: (gatewayUrl.input.value || DEFAULT_SETTINGS.gatewayUrl).trim(),
+      prefs: {
+        ...initialPrefs,
+        apiUrl: (apiUrl.input.value || initialPrefs.apiUrl).trim(),
+        gatewayUrl: (gatewayUrl.input.value || initialPrefs.gatewayUrl).trim(),
       },
     } satisfies RuntimeMessage);
     save.textContent = 'Saved';

@@ -63,9 +63,20 @@ export const authPlugin = fp<{ secret: string }>(async (app: FastifyInstance, op
 });
 
 /**
- * WebSocket auth: verify a JWT taken from the `Sec-WebSocket-Protocol` subprotocol
- * (preferred — survives proxies that strip query strings) or the `?token=` query
- * param. Returns null on failure; the handler closes the socket.
+ * WebSocket auth: verify a JWT taken from the `Authorization` header.
+ *
+ * Query-string token transport (`?token=…`, `?access_token=…`) was REMOVED
+ * because URLs land in browser history, DevTools Network panels, and
+ * reverse-proxy access logs — handing 15-min bearer tokens to anyone who can
+ * read those. The supported transports are now:
+ *
+ *   1. `Authorization: Bearer <token>` HTTP header — used by server-side
+ *      callers (CLI, integration tests) that control the WS upgrade headers.
+ *   2. First-frame control message `{type:"auth", token}` — used by the
+ *      browser WebSocket API which can't set custom headers. Handled in
+ *      `modules/session/handler.ts` via `verifyTokenString()` (below).
+ *
+ * Returns null on failure; the caller closes the socket.
  */
 export interface VerifiedToken {
   claims: AccessTokenClaims;
@@ -76,14 +87,16 @@ export interface VerifiedToken {
 export function verifyWsToken(
   app: FastifyInstance,
   authHeader: string | undefined,
-  url: URL,
 ): VerifiedToken | null {
-  let token: string | null = null;
-  if (authHeader?.startsWith('Bearer ')) token = authHeader.slice(7);
-  if (!token) {
-    const protoHeader = url.searchParams.get('access_token') ?? url.searchParams.get('token');
-    if (protoHeader) token = protoHeader;
-  }
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  return verifyTokenString(app, authHeader.slice(7));
+}
+
+/**
+ * Stand-alone token verification used by the first-frame `auth` handshake.
+ * Same behavior as verifyWsToken minus the header parsing.
+ */
+export function verifyTokenString(app: FastifyInstance, token: string): VerifiedToken | null {
   if (!token) return null;
   try {
     const claims = app.jwt.verify(token) as AccessTokenClaims;

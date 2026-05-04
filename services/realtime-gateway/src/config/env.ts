@@ -52,6 +52,17 @@ const Schema = z.object({
     .default('http://localhost:3000')
     .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
 
+  /**
+   * Pinned chrome-extension origin for the published Web Store build.
+   * Format: `chrome-extension://<32-char-id>`. Required in production —
+   * gateway refuses to boot without it. Without this pin, any malicious
+   * sibling extension could ride our blanket CORS allow.
+   */
+  EXTENSION_ORIGIN: z
+    .string()
+    .regex(/^chrome-extension:\/\/[a-z]{32}$/i, 'must be chrome-extension://<32-char-id>')
+    .optional(),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

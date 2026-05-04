@@ -13,7 +13,7 @@ import {
   PROACTIVE_STAGES,
   type ProactiveTrigger,
 } from '../../lib/coach.js';
-import { verifyWsToken } from '../../lib/auth.js';
+import { verifyWsToken, verifyTokenString, type AccessTokenClaims } from '../../lib/auth.js';
 import { emitLatency } from '../../lib/latency.js';
 import { endMeeting, runRecap } from '../../lib/postcall.js';
 
@@ -43,8 +43,15 @@ const HelloSchema = z.object({
   vocabulary: z.array(z.string().min(1)).optional(),
   repLabel: z.string().optional(),
   // Dev-only: classify every diarized turn as `customer` so the coach fires
-  // during solo testing where only the rep is on the call.
+  // during solo testing where only the rep is on the call. STRIPPED in
+  // production via `IS_PROD` below — accepting it from a real client would
+  // mislabel rep speech as customer and inflate LLM/coach billing.
   forceCustomer: z.boolean().optional(),
+});
+
+const AuthFrameSchema = z.object({
+  type: z.literal('auth'),
+  token: z.string().min(1).max(4096),
 });
 
 const SetRepSchema = z.object({
@@ -53,6 +60,15 @@ const SetRepSchema = z.object({
 });
 
 const ByeSchema = z.object({ type: z.literal('bye') });
+
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+/**
+ * Per-user concurrent-session cap. Without this, an authenticated client can
+ * open arbitrarily many WS connections (each holding STT stream + ring
+ * buffers) and exhaust gateway memory.
+ */
+const MAX_SESSIONS_PER_USER = 3;
 
 interface SessionDeps {
   stt: SttClient;
@@ -90,6 +106,7 @@ class SpeakerMap {
 
 interface ActiveSession {
   workspaceId: string;
+  userId: string;
   onFinal: (seg: SttSegment) => Promise<void>;
 }
 
@@ -105,20 +122,53 @@ export function clearActiveSession(meetingId: string): void {
   activeSessions.delete(meetingId);
 }
 
+/** Count of currently-active sessions for a (workspaceId, userId) pair. */
+function userConcurrency(workspaceId: string, userId: string): number {
+  let n = 0;
+  for (const s of activeSessions.values()) {
+    if (s.workspaceId === workspaceId && s.userId === userId) n += 1;
+  }
+  return n;
+}
+
 export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps): void {
   app.get(
     '/v1/sessions',
     { websocket: true },
     async (socket: WebSocket, req: FastifyRequest) => {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-      const verified = verifyWsToken(app, req.headers.authorization, url);
-      if (!verified) {
-        sendJson(socket, { type: 'error', code: 'TOKEN_INVALID', message: 'invalid token' });
-        socket.close(4001, 'unauthorized');
-        return;
+      // Two-step auth: try Authorization header first (CLI / server-side
+      // callers). Browser callers can't set headers on WebSocket upgrades, so
+      // they're handed off to the first-frame `auth` handshake below.
+      const headerVerified = verifyWsToken(app, req.headers.authorization);
+
+      let claims: AccessTokenClaims | null = headerVerified?.claims ?? null;
+      let rawToken: string | null = headerVerified?.raw ?? null;
+
+      // Auth-frame handshake: prompt the client and wait for the first
+      // control message. Anything else (binary audio, hello, set_rep) before
+      // the auth frame closes the socket. Bounded by AUTH_FRAME_TIMEOUT_MS so
+      // unauthenticated sockets don't sit forever.
+      const AUTH_FRAME_TIMEOUT_MS = 5_000;
+      let authResolved = false;
+      let authTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const closeUnauth = (reason: string): void => {
+        sendJson(socket, { type: 'error', code: 'TOKEN_INVALID', message: reason });
+        try {
+          socket.close(4001, 'unauthorized');
+        } catch {
+          /* ignore */
+        }
+      };
+
+      if (!claims) {
+        sendJson(socket, { type: 'auth.required' });
+        authTimer = setTimeout(() => {
+          if (!authResolved) closeUnauth('auth timeout');
+        }, AUTH_FRAME_TIMEOUT_MS);
+      } else {
+        authResolved = true;
       }
-      const claims = verified.claims;
-      const rawToken = verified.raw;
 
       let meetingId: string | null = null;
       let sttStream: SttStream | null = null;
@@ -128,7 +178,8 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       let lastFrameAt = Date.now();
       let inflightCoach = false;
       let pending: { customerText: string; turnId: string } | null = null;
-      const log = req.log.child({ sessionId, workspaceId: claims.workspaceId });
+      // log is rebound after auth-frame completes so workspaceId is logged.
+      let log = req.log.child(claims ? { sessionId, workspaceId: claims.workspaceId } : { sessionId });
 
       // ─── Proactive script-driven coaching state ───────────────────────────
       // Set when the client's `hello` lands. The proactive ticker fires opening
@@ -172,7 +223,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         // so the client can still receive `recap.ready` while the WS is open.
         const meetingForRecap = meetingId;
         const fireRecap = async (): Promise<void> => {
-          if (!meetingForRecap) return;
+          if (!meetingForRecap || !rawToken) return;
           if (deps.autoEndMeeting) {
             try {
               await endMeeting(deps.apiUrl, rawToken, meetingForRecap);
@@ -206,7 +257,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       };
 
       const drainPending = async (): Promise<void> => {
-        if (inflightCoach || !pending || !meetingId) return;
+        if (inflightCoach || !pending || !meetingId || !claims) return;
         const { customerText, turnId } = pending;
         pending = null;
         inflightCoach = true;
@@ -237,7 +288,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       };
 
       const fireProactive = async (trigger: ProactiveTrigger): Promise<void> => {
-        if (!meetingId || inflightCoach) return;
+        if (!meetingId || inflightCoach || !claims) return;
         if (!PROACTIVE_STAGES.includes(currentStage)) return;
         inflightCoach = true;
         try {
@@ -268,7 +319,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       };
 
       const onFinal = async (seg: SttSegment): Promise<void> => {
-        if (!meetingId || !speakerMap) return;
+        if (!meetingId || !speakerMap || !claims) return;
         const speaker = speakerMap.classify(seg.speakerLabel);
         rolling.push({ speaker, text: seg.text });
         if (rolling.length > deps.maxPendingSegments) {
@@ -342,6 +393,54 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       };
 
       socket.on('message', (data: Buffer, isBinary: boolean) => {
+        // Pre-auth gate: nothing flows until the first-frame auth handshake
+        // completes. Binary frames and non-auth control frames are rejected.
+        if (!claims) {
+          if (isBinary) {
+            closeUnauth('binary before auth');
+            return;
+          }
+          let raw: unknown;
+          try {
+            raw = JSON.parse(data.toString('utf8'));
+          } catch {
+            closeUnauth('bad json before auth');
+            return;
+          }
+          const parsed = AuthFrameSchema.safeParse(raw);
+          if (!parsed.success) {
+            closeUnauth('expected auth frame');
+            return;
+          }
+          const v = verifyTokenString(app, parsed.data.token);
+          if (!v) {
+            closeUnauth('invalid token');
+            return;
+          }
+          claims = v.claims;
+          rawToken = v.raw;
+          authResolved = true;
+          if (authTimer) {
+            clearTimeout(authTimer);
+            authTimer = null;
+          }
+          // Per-user concurrency cap. Without this the activeSessions map
+          // grows unbounded under abuse.
+          if (userConcurrency(claims.workspaceId, claims.sub) >= MAX_SESSIONS_PER_USER) {
+            sendJson(socket, {
+              type: 'error',
+              code: 'TOO_MANY_SESSIONS',
+              message: `max ${MAX_SESSIONS_PER_USER} concurrent sessions per user`,
+            });
+            try { socket.close(4029, 'too_many_sessions'); } catch { /* ignore */ }
+            return;
+          }
+          log = req.log.child({ sessionId, workspaceId: claims.workspaceId });
+          sendJson(socket, { type: 'auth.ok' });
+          sendJson(socket, { type: 'hello.required', sessionId });
+          return;
+        }
+
         if (isBinary) {
           if (!sttStream) {
             sendJson(socket, { type: 'error', code: 'NOT_READY', message: 'send hello first' });
@@ -364,6 +463,10 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         if (tag === 'hello') void onHello(parsed);
         else if (tag === 'set_rep') void onSetRep(parsed);
         else if (tag === 'bye') shutdown('client_bye');
+        else if (tag === 'auth') {
+          // Already authed — ignore re-auth attempts.
+          sendJson(socket, { type: 'auth.ok' });
+        }
         else
           sendJson(socket, {
             type: 'error',
@@ -388,6 +491,12 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       });
 
       const onHello = async (raw: unknown): Promise<void> => {
+        if (!claims) {
+          // Defense in depth — onHello is only dispatched after auth, but guard
+          // against a future refactor that could drop the auth gate.
+          shutdown('not_authed');
+          return;
+        }
         const parsed = HelloSchema.safeParse(raw);
         if (!parsed.success) {
           sendJson(socket, {
@@ -412,7 +521,14 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           return;
         }
         meetingId = meeting.id;
-        speakerMap = new SpeakerMap(parsed.data.repLabel ?? null, parsed.data.forceCustomer === true);
+        // Hard-strip `forceCustomer` in production. It's a dev-only convenience
+        // (Block I — solo testing). A real Web-Store user toggling it on a
+        // call would inflate LLM/coach billing and pollute the transcript.
+        const forceCustomer = !IS_PROD && parsed.data.forceCustomer === true;
+        if (parsed.data.forceCustomer === true && IS_PROD) {
+          log.warn('forceCustomer stripped in production');
+        }
+        speakerMap = new SpeakerMap(parsed.data.repLabel ?? null, forceCustomer);
 
         try {
           sttStream = await deps.stt.open(
@@ -448,6 +564,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         if (meetingId) {
           activeSessions.set(meetingId, {
             workspaceId: claims.workspaceId,
+            userId: claims.sub,
             onFinal,
           });
         }
@@ -491,7 +608,13 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       // Suppress unused warning in the auto-route path; ByeSchema keeps shape locked.
       void ByeSchema;
 
-      sendJson(socket, { type: 'hello.required', sessionId });
+      // For header-authenticated callers (CLI / tests), we can announce
+      // hello.required immediately. Browser clients receive `auth.required`
+      // first; `hello.required` is sent from inside the auth-frame branch
+      // after their token verifies.
+      if (claims) {
+        sendJson(socket, { type: 'hello.required', sessionId });
+      }
     },
   );
 }

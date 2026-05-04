@@ -147,7 +147,14 @@ export async function listenGwCmd(opts: ListenGwOpts): Promise<void> {
     }
   }
 
-  const wsUrl = cfg.gatewayUrl.replace(/^http/, 'ws') + `/v1/sessions?token=${encodeURIComponent(cfg.accessToken)}`;
+  // Auth via the `Authorization: Bearer …` header on the upgrade request —
+  // NOT via `?token=` in the URL. Query-string transport leaks bearer tokens
+  // into proxy + server access logs (the browser also exposes them in
+  // history). The Node `ws` library supports custom upgrade headers via the
+  // 3rd-arg options bag, so we use that here. The browser-side offscreen
+  // worker uses an alternate first-frame `auth` handshake — see
+  // `apps/chrome-extension/src/offscreen/index.ts`.
+  const wsUrl = cfg.gatewayUrl.replace(/^http/, 'ws') + `/v1/sessions`;
 
   print.heading('Athena listen — gateway mode (server owns STT + persistence)');
   print.kv('gateway', cfg.gatewayUrl);
@@ -157,7 +164,9 @@ export async function listenGwCmd(opts: ListenGwOpts): Promise<void> {
   print.info('Hit Ctrl-C to stop. /rep <label>, /quit.');
   print.blank();
 
-  const ws = new WebSocket(wsUrl);
+  const ws = new WebSocket(wsUrl, {
+    headers: { Authorization: `Bearer ${cfg.accessToken}` },
+  });
   let ready = false;
   const pendingCustomerText = new Map<string, string>(); // turnId not exposed by gateway → keyed by suggestion order
 

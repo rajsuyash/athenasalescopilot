@@ -6,23 +6,78 @@
 import {
   DEFAULT_SETTINGS,
   MEET_RE,
+  isAllowedApiUrl,
+  isAllowedGatewayUrl,
+  type AccountInfo,
   type ActiveMeeting,
   type CaptionStats,
   type CaptureStatus,
   type ExtensionSettings,
   type InboxNotification,
   type PersistedState,
+  type PopupPrefs,
+  type PopupQueryResponse,
   type RuntimeMessage,
 } from '../shared/types.js';
 import { log } from '../shared/log.js';
+
+/**
+ * Trust boundary: any chrome.runtime.onMessage handler is reachable by
+ * (a) our own extension contexts (popup, content, offscreen) — `sender.id`
+ *     equals `chrome.runtime.id`,
+ * (b) any web page that knows our extension ID and calls
+ *     `chrome.runtime.sendMessage('<id>', …)` — `sender.id` is OUR id BUT
+ *     `sender.tab` / `sender.url` will be set to the web page,
+ * (c) any other installed extension that calls
+ *     `chrome.runtime.sendMessage('<our-id>', …)` — `sender.id` is the
+ *     CALLER's extension id, never ours.
+ *
+ * We only ever want (a). The check below rejects (b) and (c) by requiring
+ * sender.id to match our id AND sender.tab to be undefined (which is true
+ * for popup/content/SW/offscreen but not for an external web page).
+ *
+ * Without this check, a hostile meet.google.com page could call popup.query
+ * and exfiltrate the user's access + refresh tokens, or fire capture.start
+ * to silently begin recording without consent.
+ */
+function isInternalSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  // popup / SW / offscreen do not have `tab`. Content scripts DO have a tab,
+  // but they only emit a small known set of messages (meet.detected,
+  // meet.left, meet.caption) that we further validate by type below.
+  return true;
+}
+
+/**
+ * Stricter variant: rejects messages from content scripts. Use for handlers
+ * that must NEVER be reachable from a webpage even if our content script is
+ * compromised — token-handling, capture lifecycle, popup query.
+ */
+function isPrivilegedSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  // Real popup/SW/offscreen have no `tab`. Content scripts always do.
+  if (sender.tab) return false;
+  // Pin to our own extension URLs so a tampered content script that somehow
+  // forges a bare sender shape still can't slip past.
+  const url = sender.url ?? '';
+  if (url && !url.startsWith(`chrome-extension://${chrome.runtime.id}/`)) return false;
+  return true;
+}
 
 async function readState(): Promise<PersistedState> {
   const got = (await chrome.storage.local.get('state')) as {
     state?: Partial<PersistedState>;
   };
+  const merged = { ...DEFAULT_SETTINGS, ...(got.state?.settings ?? {}) };
+  // Defense in depth: if a tampered storage entry has set apiUrl/gatewayUrl
+  // to a non-allowlisted host, snap them back to the build-time defaults.
+  // signedFetch then can't be tricked into hitting an attacker host even if
+  // the popup/content boundary leaks somewhere.
+  if (!isAllowedApiUrl(merged.apiUrl)) merged.apiUrl = DEFAULT_SETTINGS.apiUrl;
+  if (!isAllowedGatewayUrl(merged.gatewayUrl)) merged.gatewayUrl = DEFAULT_SETTINGS.gatewayUrl;
   return {
     active: got.state?.active ?? null,
-    settings: { ...DEFAULT_SETTINGS, ...(got.state?.settings ?? {}) },
+    settings: merged,
     captionStats: got.state?.captionStats ?? null,
     inbox: got.state?.inbox ?? [],
     inboxSeen: got.state?.inboxSeen ?? [],
@@ -81,9 +136,12 @@ async function resolveInternalMeetingId(externalId: string): Promise<string | nu
   const settings = await getSettings();
   if (!settings.accessToken) return null;
   try {
-    const r = await signedFetch(
-      `${settings.apiUrl}/v1/meetings?externalMeetingId=${encodeURIComponent(externalId)}&status=live&limit=1`,
-    );
+    const params = new URLSearchParams({
+      externalMeetingId: externalId,
+      status: 'live',
+      limit: '1',
+    });
+    const r = await signedFetch(`${settings.apiUrl}/v1/meetings?${params.toString()}`);
     if (!r.ok) return null;
     const body = (await r.json().catch(() => ({}))) as {
       meetings?: Array<{ id?: string }>;
@@ -256,6 +314,13 @@ function ensureFlushTimer(): void {
   flushTimer = setInterval(() => void flushBuffers(), 1500) as unknown as number;
 }
 
+function clearFlushTimer(): void {
+  if (flushTimer !== null) {
+    clearInterval(flushTimer);
+    flushTimer = null;
+  }
+}
+
 async function flushBuffers(): Promise<void> {
   if (buffers.size === 0) return;
   const settings = await getSettings();
@@ -324,6 +389,7 @@ async function ingestCaption(msg: Extract<RuntimeMessage, { type: 'meet.caption'
 // chrome.notifications (deduped against inboxSeen).
 
 const INBOX_ALARM = 'athena.inbox.poll';
+const NOTIFICATION_ID_RE = /^[\w-]{1,128}$/;
 
 interface ApiInboxResponse {
   unread?: number;
@@ -350,6 +416,9 @@ function normalizeInbox(raw: ApiInboxResponse): InboxNotification[] {
     ) {
       continue;
     }
+    // Only accept ids matching our backend's id format. Drops anything that
+    // could path-traverse if interpolated into a URL.
+    if (!NOTIFICATION_ID_RE.test(r.id)) continue;
     out.push({
       id: r.id,
       kind: r.kind,
@@ -417,12 +486,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.notifications.onClicked.addListener(async (notifId) => {
   if (!notifId.startsWith('athena:')) return;
   const id = notifId.slice('athena:'.length);
+  if (!NOTIFICATION_ID_RE.test(id)) return;
   const settings = await getSettings();
   // Best-effort mark-as-read so the badge clears next poll.
   if (settings.accessToken) {
-    void signedFetch(`${settings.apiUrl}/v1/notifications/${id}/read`, {
-      method: 'POST',
-    }).catch(() => {});
+    void signedFetch(
+      `${settings.apiUrl}/v1/notifications/${encodeURIComponent(id)}/read`,
+      { method: 'POST' },
+    ).catch(() => {});
   }
   chrome.notifications.clear(notifId);
 });
@@ -462,7 +533,14 @@ function waitForOffscreenReady(timeoutMs = 4000): Promise<void> {
       offscreenReadyPromise = null;
       reject(new Error('offscreen ready timeout'));
     }, timeoutMs);
-    function handler(raw: unknown): undefined {
+    function handler(raw: unknown, sender: chrome.runtime.MessageSender): undefined {
+      // Only accept the ready ping from our actual offscreen document — a
+      // sibling extension that knows our id could otherwise fake it and
+      // cause `offscreen.start` (which carries an access token) to be
+      // delivered before the real offscreen doc is ready.
+      if (sender.id !== chrome.runtime.id) return undefined;
+      const expectedUrl = chrome.runtime.getURL(OFFSCREEN_PATH);
+      if (sender.url !== expectedUrl) return undefined;
       const m = raw as { type?: string };
       if (m?.type !== 'offscreen.ready') return undefined;
       clearTimeout(timer);
@@ -594,6 +672,10 @@ async function stopCapture(reason: string): Promise<{ ok: boolean }> {
     }
   }
   await tearDownOffscreen();
+  // Stop the caption flush timer so we don't keep waking up after capture
+  // ends. ingestCaption restarts it on demand if shipping resumes.
+  clearFlushTimer();
+  buffers.clear();
   const cur = (await readState()).capture;
   if (cur) {
     await writeState({
@@ -614,7 +696,8 @@ interface OffscreenUpdateMsg {
   reconnectAttempt?: number | null;
 }
 
-chrome.runtime.onMessage.addListener((raw: unknown) => {
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (!isPrivilegedSender(sender)) return;
   const msg = raw as Partial<OffscreenUpdateMsg>;
   if (msg?.type !== 'offscreen.update') return;
   void (async () => {
@@ -635,16 +718,58 @@ chrome.runtime.onMessage.addListener((raw: unknown) => {
   })();
 });
 
+interface RawSuggestion {
+  type?: unknown;
+  answerText?: unknown;
+  followupText?: unknown;
+  confidenceScore?: unknown;
+  rationale?: unknown;
+  sources?: unknown;
+}
+
+interface CleanSuggestion {
+  type: string;
+  answerText: string | null;
+  followupText: string | null;
+  confidenceScore?: number;
+  rationale?: string;
+  sources?: Array<{ documentName?: string | null }>;
+}
+
+const MAX_SUGGESTION_FIELD_LEN = 4000;
+const MAX_SUGGESTION_SOURCES = 16;
+
+function clampString(v: unknown, max: number): string | null {
+  if (typeof v !== 'string') return null;
+  return v.length > max ? v.slice(0, max) : v;
+}
+
+function sanitizeSuggestion(raw: unknown): CleanSuggestion | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as RawSuggestion;
+  const type = clampString(r.type, 64);
+  if (!type) return null;
+  const answerText = r.answerText === null ? null : clampString(r.answerText, MAX_SUGGESTION_FIELD_LEN);
+  const followupText = r.followupText === null ? null : clampString(r.followupText, MAX_SUGGESTION_FIELD_LEN);
+  const out: CleanSuggestion = { type, answerText, followupText };
+  if (typeof r.confidenceScore === 'number' && Number.isFinite(r.confidenceScore)) {
+    out.confidenceScore = r.confidenceScore;
+  }
+  const rationale = clampString(r.rationale, MAX_SUGGESTION_FIELD_LEN);
+  if (rationale) out.rationale = rationale;
+  if (Array.isArray(r.sources)) {
+    out.sources = r.sources.slice(0, MAX_SUGGESTION_SOURCES).map((s) => {
+      const src = s as { documentName?: unknown };
+      const documentName = clampString(src?.documentName, 256);
+      return documentName === null ? { documentName: null } : { documentName };
+    });
+  }
+  return out;
+}
+
 interface SuggestionForwardMsg {
   type: 'suggestion.forward';
-  suggestion: {
-    type?: string;
-    answerText?: string | null;
-    followupText?: string | null;
-    confidenceScore?: number;
-    rationale?: string;
-    sources?: Array<{ documentName?: string | null }>;
-  };
+  suggestion: unknown;
 }
 
 // Footer link in the in-Meet panel — opens the admin-web meeting page.
@@ -657,24 +782,31 @@ interface SuggestionForwardMsg {
 //  2. active.meetingId is the Meet code (e.g. dvg-eptf-rnx). The admin-web
 //     route expects the workspace meeting UUID stored as
 //     active.internalMeetingId. Use that, otherwise fall back to /meetings.
-function adminWebBaseUrl(apiUrl: string): string {
-  if (apiUrl.includes('athena-api-production-aa5b')) {
+function adminWebBaseUrl(apiUrl: string): string | null {
+  // Hard allowlist — never derive an admin-web URL from an arbitrary apiUrl.
+  // The previous open-ended `replace()` could be poisoned by a tampered
+  // chrome.storage entry to produce attacker-controlled URLs.
+  if (apiUrl.startsWith('https://athena-api-production-aa5b.up.railway.app')) {
     return 'https://athena-admin-web-production.up.railway.app';
   }
-  if (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1')) {
+  if (apiUrl.startsWith('http://localhost:') || apiUrl.startsWith('http://127.0.0.1:')) {
     return 'http://localhost:3030';
   }
-  // Generic Railway pattern fallback.
-  return apiUrl.replace(/athena-api[^.]*/, 'athena-admin-web-production');
+  return null;
 }
 
-chrome.runtime.onMessage.addListener((raw: unknown) => {
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (!isPrivilegedSender(sender)) return;
   const m = raw as { type?: string };
   if (m?.type !== 'panel.openInAthena') return;
   void (async () => {
     const settings = await getSettings();
     const active = await getActive();
     const base = adminWebBaseUrl(settings.apiUrl);
+    if (!base) {
+      log.warn('[athena-bg] panel.openInAthena rejected — apiUrl not in allowlist');
+      return;
+    }
     const internalId = active?.internalMeetingId ?? null;
     const url = internalId
       ? `${base}/meetings/${encodeURIComponent(internalId)}`
@@ -687,41 +819,102 @@ chrome.runtime.onMessage.addListener((raw: unknown) => {
 // the offscreen doc forwards the payload to us and we relay it to the active
 // Meet tab's content script, which renders an in-call overlay so the rep
 // doesn't need to refresh the dashboard mid-call.
-chrome.runtime.onMessage.addListener((raw: unknown) => {
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (!isPrivilegedSender(sender)) return;
   const msg = raw as Partial<SuggestionForwardMsg>;
   if (msg?.type !== 'suggestion.forward' || !msg.suggestion) return;
-  log.debug('[athena-bg] suggestion.forward received', { hasAnswer: !!msg.suggestion.answerText, hasFollowup: !!msg.suggestion.followupText });
+  // Sanitize the gateway-originated payload at this trust boundary so a
+  // future content-script change to .innerHTML can't yield XSS, and so
+  // bloated payloads don't sit in memory forever.
+  const clean = sanitizeSuggestion(msg.suggestion);
+  if (!clean) return;
+  log.debug('[athena-bg] suggestion.forward received', {
+    hasAnswer: !!clean.answerText,
+    hasFollowup: !!clean.followupText,
+  });
   void (async () => {
     const active = await getActive();
-    if (!active || active.tabId < 0) {
-      log.debug('[athena-bg] overlay relay: no active tab');
-      return;
-    }
-    // Try the top frame first; if no listener, broadcast to all frames.
-    // Meet's UI lives in iframes, but our content script matches the top
-    // frame; the fallback covers Meet variants that swap the top document.
+    if (!active || active.tabId < 0) return;
     try {
       await chrome.tabs.sendMessage(
         active.tabId,
-        { type: 'overlay.suggestion', suggestion: msg.suggestion },
+        { type: 'overlay.suggestion', suggestion: clean },
         { frameId: 0 },
       );
     } catch {
       try {
         await chrome.tabs.sendMessage(active.tabId, {
           type: 'overlay.suggestion',
-          suggestion: msg.suggestion,
+          suggestion: clean,
         });
-      } catch (errBcast) {
-        log.warn('[athena-bg] overlay relay failed', (errBcast as Error).message);
+      } catch {
+        log.warn('[athena-bg] overlay relay failed');
       }
     }
   })();
 });
 
-chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse) => {
+/**
+ * Build the popup-facing view of state. Tokens are intentionally OMITTED —
+ * even though only privileged senders reach this handler, the principle is
+ * that the popup has no business knowing the raw bearer token. signedFetch
+ * lives entirely in the SW.
+ */
+function buildPopupQueryResponse(state: PersistedState): PopupQueryResponse {
+  const account: AccountInfo = {
+    isSignedIn: !!state.settings.accessToken,
+    email: state.settings.userEmail,
+    expiresAt: state.settings.expiresAt,
+  };
+  const prefs: PopupPrefs = {
+    apiUrl: state.settings.apiUrl,
+    gatewayUrl: state.settings.gatewayUrl,
+    shipCaptions: state.settings.shipCaptions,
+    forceCustomer: state.settings.forceCustomer,
+  };
+  return {
+    active: state.active,
+    account,
+    prefs,
+    captionStats: state.captionStats,
+    inbox: state.inbox,
+    capture: state.capture,
+  };
+}
+
+/**
+ * Validate a popup-supplied prefs blob before merging into settings. Drops
+ * any URL not in the allowlist and snaps it back to the build-time default
+ * rather than letting a tampered popup or storage entry redirect signedFetch.
+ */
+function sanitizePrefs(raw: PopupPrefs): PopupPrefs {
+  const apiUrl = isAllowedApiUrl(raw.apiUrl) ? raw.apiUrl : DEFAULT_SETTINGS.apiUrl;
+  const gatewayUrl = isAllowedGatewayUrl(raw.gatewayUrl) ? raw.gatewayUrl : DEFAULT_SETTINGS.gatewayUrl;
+  return {
+    apiUrl,
+    gatewayUrl,
+    shipCaptions: !!raw.shipCaptions,
+    forceCustomer: !!raw.forceCustomer,
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse) => {
+  // Trust check: messages from external pages or other extensions reach our
+  // SW with this same listener. Reject everything that isn't from one of our
+  // own contexts BEFORE inspecting `msg`. For content-script messages we
+  // narrow further inside the meet.* branches.
+  if (!isInternalSender(sender)) {
+    sendResponse({ ok: false, error: 'untrusted_sender' });
+    return false;
+  }
   (async () => {
     if (msg.type === 'meet.detected') {
+      // Content-script-originated. Validate it carries the expected shape
+      // and the sender's tab matches the claim before mutating active state.
+      if (!sender.tab || sender.tab.id !== msg.tabId) {
+        sendResponse({ ok: false, error: 'sender_tab_mismatch' });
+        return;
+      }
       await setActive({
         meetingId: msg.meetingId,
         meetingUrl: msg.meetingUrl,
@@ -732,6 +925,10 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
       });
       sendResponse({ ok: true });
     } else if (msg.type === 'meet.left') {
+      if (!sender.tab || sender.tab.id !== msg.tabId) {
+        sendResponse({ ok: false, error: 'sender_tab_mismatch' });
+        return;
+      }
       const active = await getActive();
       if (active && active.meetingId === msg.meetingId) {
         await stopCapture('meet_left').catch(() => undefined);
@@ -740,40 +937,67 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
       buffers.delete(msg.meetingId);
       sendResponse({ ok: true });
     } else if (msg.type === 'meet.caption') {
+      // Only the actual Meet tab's content script may inject captions. The
+      // SW already knows which tab is active; reject if the sender doesn't
+      // match.
+      const active = await getActive();
+      if (!sender.tab || !active || sender.tab.id !== active.tabId) {
+        sendResponse({ ok: false, error: 'sender_tab_mismatch' });
+        return;
+      }
       await ingestCaption(msg);
       sendResponse({ ok: true });
     } else if (msg.type === 'settings.save') {
-      // Wipe stale lastError so the popup doesn't keep showing the old 401.
+      // Privileged: only the popup may change prefs.
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
+      const prefs = sanitizePrefs(msg.prefs);
+      const cur = await getSettings();
       await writeState({
-        settings: { ...DEFAULT_SETTINGS, ...msg.settings },
+        settings: {
+          ...cur,
+          apiUrl: prefs.apiUrl,
+          gatewayUrl: prefs.gatewayUrl,
+          shipCaptions: prefs.shipCaptions,
+          forceCustomer: prefs.forceCustomer,
+        },
         captionStats: null,
       });
       void ensureInboxPolling();
       void pollInbox();
-      // Force an immediate re-flush of any buffered captions with the new
-      // token. The setInterval timer may be dead from SW eviction.
       void flushBuffers();
       sendResponse({ ok: true });
     } else if (msg.type === 'popup.query') {
+      // Privileged: never expose the response to a content script. This is
+      // the channel the audit flagged as the credential-exfil pivot.
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       const state = await readState();
-      sendResponse({
-        active: state.active,
-        settings: state.settings,
-        captionStats: state.captionStats,
-        inbox: state.inbox,
-        capture: state.capture,
-      });
+      sendResponse(buildPopupQueryResponse(state));
     } else if (msg.type === 'capture.start') {
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       const r = await startCapture();
       sendResponse(r);
     } else if (msg.type === 'capture.stop') {
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       const r = await stopCapture('user');
       sendResponse(r);
     } else if (msg.type === 'capture.refreshToken') {
       // Offscreen calls this right before reopening the WS during a reconnect.
-      // We refresh proactively (cheap if not expired) and hand back the
-      // fresh access token. If refresh fails, return ok:false so the
-      // offscreen can stop trying.
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       try {
         await refreshAccessToken();
         const s = await getSettings();
@@ -786,17 +1010,31 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
         sendResponse({ ok: false, error: (err as Error).message });
       }
     } else if (msg.type === 'inbox.markRead') {
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
+      // Reject ids that don't match our backend format.
+      if (!NOTIFICATION_ID_RE.test(msg.id)) {
+        sendResponse({ ok: false, error: 'bad_id' });
+        return;
+      }
       const settings = await getSettings();
       if (settings.accessToken) {
-        await signedFetch(`${settings.apiUrl}/v1/notifications/${msg.id}/read`, {
-          method: 'POST',
-        }).catch(() => {});
+        await signedFetch(
+          `${settings.apiUrl}/v1/notifications/${encodeURIComponent(msg.id)}/read`,
+          { method: 'POST' },
+        ).catch(() => {});
       }
       const state = await readState();
       await writeState({ inbox: state.inbox.filter((n) => n.id !== msg.id) });
       await refreshActionBadge();
       sendResponse({ ok: true });
     } else if (msg.type === 'auth.login') {
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       try {
         const settings = await getSettings();
         const r = await fetch(`${settings.apiUrl}/v1/auth/login`, {
@@ -839,9 +1077,17 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
         });
       }
     } else if (msg.type === 'auth.logout') {
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       await stopCapture('logout').catch(() => undefined);
+      // Full reset: token fields, captionStats, capture state, inbox AND
+      // inboxSeen. A shared/forensic profile must not leak prior session
+      // notifications or active-meeting context after sign-out.
       const settings = await getSettings();
       await writeState({
+        active: null,
         settings: {
           ...settings,
           accessToken: null,
@@ -851,12 +1097,18 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
         },
         captionStats: null,
         capture: null,
+        inbox: [],
+        inboxSeen: [],
       });
+      buffers.clear();
+      clearFlushTimer();
+      await refreshActionBadge();
       sendResponse({ ok: true });
     } else if (msg.type === 'demo.injectCaptions') {
-      // Demo path: ship 3 canned objections through the same gateway
-      // endpoint a content-script caption capture would use. Lets the rep
-      // verify the coach loop without depending on Meet's caption DOM.
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
       try {
         const settings = await getSettings();
         if (!settings.accessToken) {

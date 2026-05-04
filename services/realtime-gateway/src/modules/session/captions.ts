@@ -50,26 +50,25 @@ export function captionsRoutes(deps: CaptionsDeps) {
       const claims = await req.requireAuth();
       const body = Body.parse(req.body);
 
+      // Scope to (workspaceId, hostUserId, externalMeetingId, live). Adding
+      // hostUserId to the where-clause (rather than filtering after the
+      // findFirst) prevents a cross-host collision: if two reps in the same
+      // workspace ran a Meet with the same code, the previous code's
+      // newest-wins rule could deliver one rep's captions into the other
+      // rep's session before the post-fetch host check kicked in.
       const meeting = await prisma.meeting.findFirst({
         where: {
           workspaceId: claims.workspaceId,
+          hostUserId: claims.sub,
           externalMeetingId: body.externalMeetingId,
           status: 'live',
         },
-        // Newest matching live meeting wins. Without this, repeated visits to
-        // the same Meet code (or duplicate "auto" creates) route captions to
-        // the OLDEST meeting record so suggestions never appear on the page
-        // the rep is actually viewing.
         orderBy: { startedAt: 'desc' },
         select: { id: true, hostUserId: true, startedAt: true },
       });
       if (!meeting) {
         reply.status(404);
         return { error: 'NO_LIVE_MEETING', message: 'no live meeting for that external id' };
-      }
-      if (meeting.hostUserId !== claims.sub) {
-        reply.status(403);
-        return { error: 'NOT_HOST', message: 'only the meeting host may inject captions' };
       }
 
       const active = getActiveSession(meeting.id);

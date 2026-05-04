@@ -7,8 +7,20 @@ if (existsSync(outdir)) rmSync(outdir, { recursive: true, force: true });
 mkdirSync(outdir, { recursive: true });
 
 const isProd = process.env.ATHENA_PROD === '1';
-const apiUrl = process.env.ATHENA_API_URL ?? (isProd ? 'https://athena.app' : 'http://localhost:4000');
-const gatewayUrl = process.env.ATHENA_GATEWAY_URL ?? (isProd ? 'wss://athena.app/ws' : 'http://localhost:4040');
+
+// Prod builds MUST come with explicit Railway URL env vars. Falling back to a
+// placeholder host (we previously baked in athena.app, which we don't own and
+// which doesn't match manifest host_permissions) silently produced a broken
+// extension that talked to an unowned domain.
+const apiUrl = process.env.ATHENA_API_URL ?? (isProd ? null : 'http://localhost:4000');
+const gatewayUrl = process.env.ATHENA_GATEWAY_URL ?? (isProd ? null : 'http://localhost:4040');
+if (isProd && (!apiUrl || !gatewayUrl)) {
+  console.error(
+    '[esbuild] Refusing to build prod extension without ATHENA_API_URL and ATHENA_GATEWAY_URL.\n' +
+      '          Re-run with both env vars set to the Railway hosts in manifest.json host_permissions.',
+  );
+  process.exit(2);
+}
 
 const common = {
   bundle: true,
