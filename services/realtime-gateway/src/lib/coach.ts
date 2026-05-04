@@ -409,6 +409,44 @@ export interface ProactiveInput {
   stage: string;
   trigger: ProactiveTrigger;
   contextTurns: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>;
+  /** Recently emitted proactive followup texts (most-recent first). Coach
+   *  uses these to avoid suggesting the same line twice and to detect when
+   *  the rep already spoke a recent suggestion. */
+  recentSuggestions?: string[];
+}
+
+/** Loose normalization for similarity checks. Strips punctuation, collapses
+ *  whitespace, lowercases. Two strings whose normalized forms match for the
+ *  first ~30 chars are treated as duplicates. */
+function normalizeForDedup(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isDuplicateOrSpoken(
+  candidate: string,
+  recentSuggestions: string[],
+  contextTurns: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>,
+): boolean {
+  const norm = normalizeForDedup(candidate);
+  if (norm.length < 8) return false;
+  const head = norm.slice(0, 30);
+  for (const r of recentSuggestions) {
+    const rn = normalizeForDedup(r);
+    if (rn.startsWith(head) || norm.startsWith(rn.slice(0, 30))) return true;
+  }
+  // Skip if the rep already spoke (a paraphrase of) the suggestion in the
+  // last few turns — no point re-suggesting what's already on the call.
+  for (const t of contextTurns.slice(-6)) {
+    if (t.speaker !== 'rep') continue;
+    const tn = normalizeForDedup(t.text);
+    if (tn.length < 8) continue;
+    if (tn.includes(head) || norm.includes(tn.slice(0, 30))) return true;
+  }
+  return false;
 }
 
 /** Returns null when there's no published script block for the stage, when
@@ -422,17 +460,27 @@ export async function proactiveCoach(
   const scriptBody = await getActiveScriptForStage(input.workspaceId, input.stage);
   if (!scriptBody) return null;
 
+  const recent = input.recentSuggestions ?? [];
   const userPrompt = [
     `Trigger: ${input.trigger}`,
     `Current stage: ${input.stage}`,
     input.contextTurns.length
       ? `Recent turns:\n${input.contextTurns
-          .slice(-4)
+          .slice(-6)
           .map((t) => `${t.speaker.toUpperCase()}: ${t.text}`)
           .join('\n')}`
       : 'No turns yet — call just started.',
+    recent.length
+      ? `Already suggested in this call (DO NOT repeat or paraphrase these — pick a DIFFERENT line from the script):\n${recent
+          .slice(0, 5)
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join('\n')}`
+      : null,
     `Workspace script for stage=${input.stage}:\n${scriptBody}`,
-  ].join('\n\n');
+    `IMPORTANT: replace any {{placeholder}} tokens with natural conversational filler (e.g. {{Name}} → "there"). Never output a curly-brace placeholder verbatim. If every script line for this stage has already been suggested, output a brief follow-up question that advances the conversation instead of repeating.`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 
   const r = await deps.llm.complete({
     workspaceId: input.workspaceId,
@@ -449,6 +497,24 @@ export async function proactiveCoach(
   if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
     return null;
   }
+
+  // Reject duplicates AFTER the LLM call — even with the avoid-list in the
+  // prompt the model occasionally regurgitates the same opener verbatim.
+  // Also reject if the rep already spoke (a paraphrase of) the candidate.
+  if (
+    isDuplicateOrSpoken(
+      r.parsed.followup_text,
+      input.recentSuggestions ?? [],
+      input.contextTurns,
+    )
+  ) {
+    return null;
+  }
+
+  // Strip any leftover {{placeholder}} tokens so we never surface raw
+  // template syntax to the rep on a live call.
+  const cleanedText = r.parsed.followup_text.replace(/\{\{[^}]*\}\}/g, 'there').trim();
+  if (cleanedText.length < 4) return null;
 
   const conf = clamp01(r.parsed.confidence);
   const stageSignal: StageSignal = (STAGE_SIGNALS as readonly string[]).includes(input.stage)
@@ -474,7 +540,7 @@ export async function proactiveCoach(
       turnId: turn.id,
       suggestionType: r.parsed.type,
       answerText: null,
-      followupText: r.parsed.followup_text,
+      followupText: cleanedText,
       confidenceScore: conf,
       priorityScore: 0.5,
       sourceChunkIds: [],
@@ -486,7 +552,7 @@ export async function proactiveCoach(
   return {
     type: r.parsed.type,
     answerText: null,
-    followupText: r.parsed.followup_text,
+    followupText: cleanedText,
     confidenceScore: conf,
     priorityScore: 0.5,
     sourceChunkIds: [],

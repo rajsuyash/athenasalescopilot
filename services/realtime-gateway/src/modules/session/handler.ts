@@ -140,6 +140,9 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       let openingFired = false;
       let currentStage = 'opener';
       let proactiveTick: ReturnType<typeof setInterval> | null = null;
+      // Last ~8 proactive suggestions emitted; passed back into the coach so
+      // it doesn't repeat itself when the rep stays silent.
+      const recentSuggestions: string[] = [];
 
       const PROACTIVE_THROTTLE_MS = 8_000;
       const REP_SILENCE_MS = 12_000;
@@ -244,12 +247,17 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
               meetingId,
               stage: currentStage,
               trigger,
-              contextTurns: rolling.slice(-4),
+              contextTurns: rolling.slice(-6),
+              recentSuggestions: recentSuggestions.slice(0, 8),
             },
             deps,
           );
           if (r) {
             lastSuggestionAt = Date.now();
+            if (r.followupText) {
+              recentSuggestions.unshift(r.followupText);
+              if (recentSuggestions.length > 12) recentSuggestions.length = 12;
+            }
             sendJson(socket, { type: 'suggestion.generated', suggestion: r });
           }
         } catch (err) {
