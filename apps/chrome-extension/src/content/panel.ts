@@ -247,17 +247,29 @@ function labelFor(s: PanelSuggestion): string {
   return 'Suggestion';
 }
 
+function hasSpeakableText(s: PanelSuggestion): boolean {
+  return Boolean(
+    (s.answerText && s.answerText.trim().length > 0) ||
+      (s.followupText && s.followupText.trim().length > 0),
+  );
+}
+
 function render(): void {
   if (!listEl || !badgeEl) return;
   listEl.replaceChildren();
-  const filtered = state.history.filter((s) =>
+  // Drop suggestions with no speakable body — these are server-side
+  // suppressed entries (urgency below threshold, policy violation, etc).
+  // They're forwarded so the SW counter stays accurate but rendering an
+  // empty COACH card is just noise to the rep.
+  const visible = state.history.filter(hasSpeakableText);
+  const filtered = visible.filter((s) =>
     state.filter === 'all' ? true : s.type === state.filter,
   );
   if (filtered.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty';
     empty.textContent =
-      state.history.length === 0
+      visible.length === 0
         ? 'No suggestions yet. Start speaking to trigger the coach.'
         : 'No suggestions match this filter.';
     listEl.appendChild(empty);
