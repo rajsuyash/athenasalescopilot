@@ -63,6 +63,27 @@ export default async function PlaybooksPage() {
         </p>
       </header>
 
+      <Link
+        href="/playbooks/bmc/upload"
+        className="block mb-8 rounded-lg border border-emerald-500/40 bg-gradient-to-br from-emerald-500/10 to-cyan-500/5 p-6 hover:border-emerald-500/70 transition group"
+      >
+        <div className="flex items-baseline justify-between mb-2">
+          <h2 className="text-lg font-medium text-emerald-300 group-hover:text-emerald-200">
+            Generate a sales script from your business
+          </h2>
+          <span className="text-xs uppercase tracking-wide text-emerald-300">Recommended</span>
+        </div>
+        <p className="text-sm text-white/70 mb-2">
+          Upload your Business Model Canvas (PDF) and the agent generates a
+          complete SLOSHED 2.0 probing + 5-Step Pillar Pitching script tailored
+          to your niche, offer, and pricing. Live coach uses it within 30s.
+        </p>
+        <p className="text-xs text-white/50">
+          Don&apos;t have a BMC? Build one with the agent →{' '}
+          <span className="text-white/30">(coming next)</span>
+        </p>
+      </Link>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Link
           href="/knowledge"
