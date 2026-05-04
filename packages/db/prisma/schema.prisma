@@ -20,6 +20,9 @@ model User {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email         String   @unique
   name          String
+  /// Optional during the Block T migration window. After all users have a
+  /// Clerk identity, drop passwordHash and make this NOT NULL.
+  clerkUserId   String?  @unique @map("clerk_user_id")
   passwordHash  String?  @map("password_hash")
   globalStatus  String   @default("active") @map("global_status")
   createdAt     DateTime @default(now()) @map("created_at")
