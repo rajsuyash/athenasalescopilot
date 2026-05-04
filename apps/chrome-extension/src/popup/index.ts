@@ -148,12 +148,18 @@ function activeCard(
     setTimeout(() => (copy.textContent = 'Copy meeting ID'), 1200);
   });
   buttons.appendChild(copy);
-  const open = document.createElement('a');
+  const open = document.createElement('button');
   open.className = 'btn';
-  open.href = `athena://start?meeting_id=${encodeURIComponent(
-    active.meetingId,
-  )}&title=${encodeURIComponent(active.title ?? '')}`;
+  open.type = 'button';
   open.textContent = 'Open in Athena';
+  open.addEventListener('click', () => {
+    // Routes through SW handler that picks the right admin-web host and
+    // resolves the workspace meeting UUID. Same path the in-Meet panel
+    // footer uses, so behavior stays consistent across surfaces.
+    void chrome.runtime
+      .sendMessage({ type: 'panel.openInAthena' })
+      .catch(() => undefined);
+  });
   buttons.appendChild(open);
   card.appendChild(buttons);
 
