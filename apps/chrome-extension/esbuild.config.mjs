@@ -14,7 +14,11 @@ const common = {
   bundle: true,
   format: 'esm',
   target: ['chrome120'],
-  sourcemap: true,
+  // Sourcemaps are useful in dev but MUST NOT ship to the Chrome Web Store —
+  // they bloat the zip ~4x and leak our source layout to anyone who opens
+  // devtools on the extension. Inline maps in dev (so the watch flow keeps
+  // working) and drop them entirely in prod.
+  sourcemap: isProd ? false : 'inline',
   logLevel: 'info',
   minify: !watch,
   define: {

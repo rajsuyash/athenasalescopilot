@@ -92,7 +92,9 @@ function makePng(size) {
   ]);
 }
 
-for (const size of [16, 48, 128]) {
+// 32 added for the Chrome Web Store toolbar icon — manifest references all
+// four sizes (16/32/48/128).
+for (const size of [16, 32, 48, 128]) {
   const path = resolve(outDir, `icon-${size}.png`);
   writeFileSync(path, makePng(size));
   console.log('wrote', path);

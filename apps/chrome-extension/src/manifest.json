@@ -2,20 +2,42 @@
   "manifest_version": 3,
   "name": "Athena Companion",
   "short_name": "Athena",
-  "version": "0.1.0",
-  "description": "Detects Google Meet sessions and pairs them with the Athena overlay.",
-  "permissions": ["tabs", "storage", "activeTab", "scripting", "notifications", "alarms", "tabCapture", "offscreen"],
-  "host_permissions": ["https://meet.google.com/*"],
+  "version": "0.1.1",
+  "description": "Real-time sales coach for Google Meet. Captures call audio, transcribes, and surfaces grounded answers in the Meet tab.",
+  "author": "Athena",
+  "homepage_url": "https://athena-admin-web-production.up.railway.app",
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "scripting",
+    "notifications",
+    "alarms",
+    "tabCapture",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://athena-api-production-aa5b.up.railway.app/*",
+    "https://athena-realtime-production.up.railway.app/*",
+    "wss://athena-realtime-production.up.railway.app/*"
+  ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https: wss:;"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://athena-api-production-aa5b.up.railway.app https://athena-realtime-production.up.railway.app wss://athena-realtime-production.up.railway.app;"
   },
   "background": {
     "service_worker": "background/index.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Athena",
-    "default_popup": "popup.html"
+    "default_title": "Athena Companion",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "content_scripts": [
     {
@@ -26,6 +48,7 @@
   ],
   "icons": {
     "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   }

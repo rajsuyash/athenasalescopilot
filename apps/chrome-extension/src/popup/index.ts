@@ -35,7 +35,7 @@ async function render(): Promise<void> {
   if (!root) return;
   const { active, settings, captionStats, inbox, capture } = await load();
   const devMode = isDevBuild(settings);
-  root.innerHTML = '';
+  root.replaceChildren();
   root.appendChild(activeCard(active, captionStats, capture, !!settings.accessToken, devMode));
   if (inbox.length > 0) root.appendChild(inboxCard(inbox));
   if (!settings.refreshToken) {
@@ -107,13 +107,21 @@ function activeCard(
   const card = document.createElement('div');
   card.className = 'card stack';
   const title = document.createElement('div');
-  title.innerHTML = `<span class="pill">DETECTED</span> ${escapeHtml(active.title ?? '(untitled)')}`;
+  // Avoid innerHTML — store reviewers' static analyzers occasionally flag it
+  // even when the only interpolation is escaped. Build the node tree directly.
+  const pill = document.createElement('span');
+  pill.className = 'pill';
+  pill.textContent = 'DETECTED';
+  title.appendChild(pill);
+  title.appendChild(document.createTextNode(' ' + (active.title ?? '(untitled)')));
   card.appendChild(title);
   // Meeting code is engineer signal — useful in dev for support tickets but
   // adds noise for paying customers.
   if (devMode) {
     const id = document.createElement('div');
-    id.innerHTML = `<code>${escapeHtml(active.meetingId)}</code>`;
+    const code = document.createElement('code');
+    code.textContent = active.meetingId;
+    id.appendChild(code);
     card.appendChild(id);
   }
 
@@ -442,14 +450,6 @@ function labeledInput(
     'background: rgba(255,255,255,0.05); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-size: 12px; font-family: inherit;';
   wrap.appendChild(input);
   return { wrap, input };
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c,
-  );
 }
 
 void render();
