@@ -24,7 +24,18 @@ export async function buildApp(): Promise<FastifyInstance> {
     genReqId: () => crypto.randomUUID(),
   });
 
-  await app.register(cors, { origin: env.CORS_ORIGINS, credentials: true });
+  // Mirror api/server.ts: admin-web origins + any chrome-extension origin so
+  // the popup can hit /v1/sessions/captions and the offscreen WS can connect.
+  const allowedOrigins = new Set(env.CORS_ORIGINS);
+  await app.register(cors, {
+    credentials: true,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.has(origin)) return cb(null, true);
+      if (origin.startsWith('chrome-extension://')) return cb(null, true);
+      return cb(new Error('cors: origin not allowed'), false);
+    },
+  });
   await app.register(sensible);
   await app.register(errorHandlerPlugin);
   await app.register(authPlugin, { secret: env.JWT_ACCESS_SECRET });

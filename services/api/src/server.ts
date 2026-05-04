@@ -36,7 +36,19 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(helmet, { contentSecurityPolicy: false });
-  await app.register(cors, { origin: env.CORS_ORIGINS, credentials: true });
+  // Allow the configured admin-web origins AND any chrome-extension origin so
+  // the Athena Companion popup can sign in regardless of the per-install ext id.
+  const allowed = new Set(env.CORS_ORIGINS);
+  await app.register(cors, {
+    credentials: true,
+    origin: (origin, cb) => {
+      // Same-origin requests (e.g. server-side fetches) have no Origin header.
+      if (!origin) return cb(null, true);
+      if (allowed.has(origin)) return cb(null, true);
+      if (origin.startsWith('chrome-extension://')) return cb(null, true);
+      return cb(new Error('cors: origin not allowed'), false);
+    },
+  });
   await app.register(sensible);
   await app.register(rateLimit, {
     global: false,
