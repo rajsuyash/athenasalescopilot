@@ -156,8 +156,13 @@ chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: Overlay
   }
   if (msg?.type !== 'overlay.suggestion' || !msg.suggestion) return;
   try {
-    renderSuggestion(msg.suggestion);
+    // Always add to history panel — even rationale-only entries are useful
+    // for the rep to scroll back through. Toast only renders when there's
+    // something speakable on the card; otherwise we'd flash an empty box.
     panel.add(msg.suggestion);
+    if (msg.suggestion.answerText || msg.suggestion.followupText) {
+      renderSuggestion(msg.suggestion);
+    }
   } catch (err) {
     console.warn('[athena-content] overlay render failed', err);
   }

@@ -261,7 +261,13 @@ function openSocket(): void {
       case 'suggestion.generated':
         active.suggestionsHeard += 1;
         reportUpdate({ suggestionsHeard: active.suggestionsHeard });
-        if (payload.suggestion && (payload.suggestion.answerText || payload.suggestion.followupText)) {
+        // Forward EVERY suggestion to the SW so the in-Meet history panel
+        // can show it. Previously we filtered out suggestions with empty
+        // answerText AND followupText, which silently dropped suppressed
+        // and rationale-only entries from the panel even though the
+        // counter reflected them. The content-script overlay (toast) and
+        // the panel both decide separately whether to render.
+        if (payload.suggestion) {
           void chrome.runtime.sendMessage({
             type: 'suggestion.forward',
             suggestion: payload.suggestion,
