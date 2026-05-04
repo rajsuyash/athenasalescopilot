@@ -59,8 +59,31 @@ model Workspace {
   auditLogs           AuditLog[]
   retentionPolicies   RetentionPolicy[]
   invites             Invite[]
+  bmc                 WorkspaceBmc?
 
   @@map("workspaces")
+}
+
+/// Per-workspace Business Model Canvas. 1:1 with Workspace. Source for the
+/// auto-script-generator (Block Q). Stored as a single JSONB blob so the
+/// 10-section bmc-builder skill can evolve without a schema migration; if we
+/// later need to filter by, say, `niche`, add a generated column.
+model WorkspaceBmc {
+  workspaceId String   @id @map("workspace_id") @db.Uuid
+  /// Object keyed by BMC section: passion, niche, problem, usp, mvp,
+  /// mechanism, message, channel, pricing, delivery. Section values are
+  /// free-form structured text the bmc-builder skill produces.
+  data        Json
+  /// 'pdf' | 'interactive' | 'manual' — drives audit + UX hints.
+  sourceType  String   @map("source_type")
+  /// Bumped on every full re-publish; used to invalidate downstream caches.
+  version     Int      @default(1)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_bmc")
 }
 
 model UserWorkspaceMembership {
