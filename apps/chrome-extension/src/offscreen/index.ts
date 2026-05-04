@@ -289,11 +289,14 @@ function openSocket(): void {
       reportUpdate({ closed: true, lastError: null });
       return;
     }
-    void scheduleReconnect(`ws_closed_${ev.code} ${ev.reason || ''}`.trim());
+    // 4001 = gateway rejected the access token at handshake. Skip the backoff
+    // delay so we refresh + retry immediately rather than waiting up to 16s.
+    const isAuthFail = ev.code === 4001;
+    void scheduleReconnect(`ws_closed_${ev.code} ${ev.reason || ''}`.trim(), isAuthFail);
   });
 }
 
-async function scheduleReconnect(reason: string): Promise<void> {
+async function scheduleReconnect(reason: string, fastPath = false): Promise<void> {
   if (!active) return;
   const attempt = (active.reconnectAttempt ?? 0) + 1;
   if (attempt > MAX_RECONNECT_ATTEMPTS) {
@@ -303,9 +306,11 @@ async function scheduleReconnect(reason: string): Promise<void> {
   }
   active.reconnectAttempt = attempt;
   reportUpdate({ reconnectAttempt: attempt, lastError: `reconnecting (attempt ${attempt})` });
-  const delay = BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)];
-  log.debug(`[athena-offscreen] reconnect in ${delay}ms (attempt ${attempt})`);
-  await new Promise((res) => setTimeout(res, delay));
+  const delay = fastPath
+    ? 0
+    : BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)] ?? 16_000;
+  log.debug(`[athena-offscreen] reconnect in ${delay}ms (attempt ${attempt}, fast=${fastPath})`);
+  if (delay > 0) await new Promise((res) => setTimeout(res, delay));
   if (!active) return;
   // Refresh the access token via the SW. Token may have expired during the
   // outage; using the stale one would just trigger another close.

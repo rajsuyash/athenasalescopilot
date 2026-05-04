@@ -173,20 +173,33 @@ async function refreshAccessToken(): Promise<string | null> {
  * fetch() wrapper that injects the current access token and, on 401,
  * silently refreshes + retries once. Use everywhere instead of raw fetch
  * for endpoints that require auth.
+ *
+ * Each call is bounded by an AbortController so a hung backend never wedges
+ * the SW alarm callback (e.g. inbox poll firing every 30s).
  */
+const SIGNED_FETCH_TIMEOUT_MS = 15_000;
+
 async function signedFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const settings = await getSettings();
   const headers = new Headers(init.headers);
   if (settings.accessToken) {
     headers.set('authorization', `Bearer ${settings.accessToken}`);
   }
-  let res = await fetch(url, { ...init, headers });
+  const doFetch = async (auth: Headers): Promise<Response> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), SIGNED_FETCH_TIMEOUT_MS);
+    try {
+      return await fetch(url, { ...init, headers: auth, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let res = await doFetch(headers);
   if (res.status !== 401) return res;
   const fresh = await refreshAccessToken();
   if (!fresh) return res;
   headers.set('authorization', `Bearer ${fresh}`);
-  res = await fetch(url, { ...init, headers });
-  return res;
+  return doFetch(headers);
 }
 
 function parseMeetUrl(url: string | undefined): { meetingId: string; meetingUrl: string } | null {
