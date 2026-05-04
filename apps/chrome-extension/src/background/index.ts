@@ -648,17 +648,37 @@ interface SuggestionForwardMsg {
 }
 
 // Footer link in the in-Meet panel — opens the admin-web meeting page.
+//
+// Two gotchas this handler accounts for:
+//  1. The api host (athena-api-production-aa5b...) does NOT share a stem
+//     with admin-web (athena-admin-web-production...), so a naive
+//     `replace('athena-api','athena-admin-web')` produces an invalid host.
+//     Map by full Railway domain instead, fall back to localhost in dev.
+//  2. active.meetingId is the Meet code (e.g. dvg-eptf-rnx). The admin-web
+//     route expects the workspace meeting UUID stored as
+//     active.internalMeetingId. Use that, otherwise fall back to /meetings.
+function adminWebBaseUrl(apiUrl: string): string {
+  if (apiUrl.includes('athena-api-production-aa5b')) {
+    return 'https://athena-admin-web-production.up.railway.app';
+  }
+  if (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1')) {
+    return 'http://localhost:3030';
+  }
+  // Generic Railway pattern fallback.
+  return apiUrl.replace(/athena-api[^.]*/, 'athena-admin-web-production');
+}
+
 chrome.runtime.onMessage.addListener((raw: unknown) => {
   const m = raw as { type?: string };
   if (m?.type !== 'panel.openInAthena') return;
   void (async () => {
     const settings = await getSettings();
     const active = await getActive();
-    if (!active?.meetingId) return;
-    // Translate api URL → admin-web URL by swapping the api subdomain. Falls
-    // back to the api host if no admin URL is derivable (dev / custom hosts).
-    const adminUrl = settings.apiUrl.replace('athena-api', 'athena-admin-web');
-    const url = `${adminUrl}/meetings/${encodeURIComponent(active.meetingId)}`;
+    const base = adminWebBaseUrl(settings.apiUrl);
+    const internalId = active?.internalMeetingId ?? null;
+    const url = internalId
+      ? `${base}/meetings/${encodeURIComponent(internalId)}`
+      : `${base}/meetings`;
     void chrome.tabs.create({ url });
   })();
 });
