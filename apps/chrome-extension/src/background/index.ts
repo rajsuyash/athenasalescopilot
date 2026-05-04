@@ -647,6 +647,22 @@ interface SuggestionForwardMsg {
   };
 }
 
+// Footer link in the in-Meet panel — opens the admin-web meeting page.
+chrome.runtime.onMessage.addListener((raw: unknown) => {
+  const m = raw as { type?: string };
+  if (m?.type !== 'panel.openInAthena') return;
+  void (async () => {
+    const settings = await getSettings();
+    const active = await getActive();
+    if (!active?.meetingId) return;
+    // Translate api URL → admin-web URL by swapping the api subdomain. Falls
+    // back to the api host if no admin URL is derivable (dev / custom hosts).
+    const adminUrl = settings.apiUrl.replace('athena-api', 'athena-admin-web');
+    const url = `${adminUrl}/meetings/${encodeURIComponent(active.meetingId)}`;
+    void chrome.tabs.create({ url });
+  })();
+});
+
 // Real-time suggestion fan-out: when the gateway pushes `suggestion.generated`,
 // the offscreen doc forwards the payload to us and we relay it to the active
 // Meet tab's content script, which renders an in-call overlay so the rep

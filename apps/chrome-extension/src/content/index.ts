@@ -5,6 +5,7 @@
  * settings) and emits one `meet.caption` per finalized line.
  */
 import { MEET_RE, type RuntimeMessage } from '../shared/types.js';
+import * as panel from './panel.js';
 
 let lastReportedId: string | null = null;
 
@@ -15,6 +16,9 @@ function emit(): void {
   const title = document.title?.replace(/^Meet\s*[-–]\s*/i, '').trim() || null;
   if (lastReportedId === meetingId) return;
   lastReportedId = meetingId;
+  // Hydrate the in-Meet panel from chrome.storage so the rep can see prior
+  // suggestions even after a tab reload mid-call.
+  panel.attach(meetingId);
   const msg: RuntimeMessage = {
     type: 'meet.detected',
     tabId: -1, // background fills it from sender.tab.id
@@ -147,9 +151,13 @@ function renderSuggestion(s: OverlaySuggestion): void {
 }
 
 chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion }) => {
+  if (msg?.type === 'panel.toggle') {
+    return; // panel.ts handles via its own message listener if needed
+  }
   if (msg?.type !== 'overlay.suggestion' || !msg.suggestion) return;
   try {
     renderSuggestion(msg.suggestion);
+    panel.add(msg.suggestion);
   } catch (err) {
     console.warn('[athena-content] overlay render failed', err);
   }
