@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { NotificationBell } from './NotificationBell';
 
 export interface ShellProps {
   email?: string | null;
@@ -19,13 +18,9 @@ export function Shell({ email, workspace, children }: ShellProps) {
             <Link href="/dashboard" className="hover:text-white">Dashboard</Link>
             <Link href="/playbooks" className="hover:text-white">Playbooks</Link>
             <Link href="/meetings" className="hover:text-white">Meetings</Link>
-            <Link href="/inbox" className="hover:text-white">Inbox</Link>
-            <Link href="/analytics" className="hover:text-white">Analytics</Link>
-            <Link href="/audit" className="hover:text-white">Audit</Link>
             <Link href="/settings" className="hover:text-white">Settings</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-white/50">
-            <NotificationBell />
             {workspace ? <span>{workspace}</span> : null}
             {email ? <span>{email}</span> : null}
             <form action="/api/auth/logout" method="post">

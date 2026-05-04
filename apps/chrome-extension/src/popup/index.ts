@@ -27,19 +27,25 @@ async function load(): Promise<QueryResponse> {
   } satisfies RuntimeMessage)) as QueryResponse;
 }
 
+function isDevBuild(settings: ExtensionSettings): boolean {
+  return /localhost|127\.0\.0\.1/.test(settings.gatewayUrl);
+}
+
 async function render(): Promise<void> {
   if (!root) return;
   const { active, settings, captionStats, inbox, capture } = await load();
+  const devMode = isDevBuild(settings);
   root.innerHTML = '';
-  root.appendChild(activeCard(active, captionStats, capture, !!settings.accessToken));
+  root.appendChild(activeCard(active, captionStats, capture, !!settings.accessToken, devMode));
   if (inbox.length > 0) root.appendChild(inboxCard(inbox));
-  // Choose auth flow based on whether we have a refresh token
   if (!settings.refreshToken) {
     root.appendChild(signInCard(settings));
   } else {
-    root.appendChild(signedInCard(settings));
+    root.appendChild(signedInCard(settings, devMode));
   }
-  root.appendChild(advancedCard(settings));
+  // Endpoints editor is dev-only — paying customers never need to override
+  // the production backend URLs.
+  if (devMode) root.appendChild(advancedCard(settings));
 }
 
 function inboxCard(items: InboxNotification[]): HTMLElement {
@@ -90,6 +96,7 @@ function activeCard(
   stats: CaptionStats | null,
   capture: CaptureStatus | null,
   signedIn: boolean,
+  devMode: boolean,
 ): HTMLElement {
   if (!active) {
     const empty = document.createElement('div');
@@ -102,9 +109,13 @@ function activeCard(
   const title = document.createElement('div');
   title.innerHTML = `<span class="pill">DETECTED</span> ${escapeHtml(active.title ?? '(untitled)')}`;
   card.appendChild(title);
-  const id = document.createElement('div');
-  id.innerHTML = `<code>${escapeHtml(active.meetingId)}</code>`;
-  card.appendChild(id);
+  // Meeting code is engineer signal — useful in dev for support tickets but
+  // adds noise for paying customers.
+  if (devMode) {
+    const id = document.createElement('div');
+    id.innerHTML = `<code>${escapeHtml(active.meetingId)}</code>`;
+    card.appendChild(id);
+  }
 
   const capturing = !!capture && !capture.closed;
   if (capturing && capture) {
@@ -112,22 +123,25 @@ function activeCard(
     s.style.fontSize = '11px';
     if (capture.reconnectAttempt) {
       s.style.color = '#facc15';
-      s.textContent = `● reconnecting (attempt ${capture.reconnectAttempt}) · finals ${capture.finalsHeard} · suggestions ${capture.suggestionsHeard}`;
-    } else if (capture.lastError) {
+      s.textContent = `Reconnecting (attempt ${capture.reconnectAttempt})…`;
+    } else if (capture.lastError && devMode) {
       s.style.color = '#86efac';
-      s.textContent = `● live · audio frames ${capture.shipped} · finals ${capture.finalsHeard} · ${capture.lastError}`;
-    } else {
+      s.textContent = `● live · ${capture.lastError}`;
+    } else if (devMode) {
       s.style.color = '#86efac';
       s.textContent = `● live · audio frames ${capture.shipped} · finals ${capture.finalsHeard} · suggestions ${capture.suggestionsHeard}`;
+    } else {
+      s.style.color = '#86efac';
+      s.textContent = `● Live — listening for prompts`;
     }
     card.appendChild(s);
   } else if (capture && capture.closed && capture.lastError) {
     const s = document.createElement('div');
     s.style.fontSize = '11px';
     s.style.color = '#fca5a5';
-    s.textContent = `capture stopped — ${capture.lastError}`;
+    s.textContent = `Capture stopped — ${capture.lastError}`;
     card.appendChild(s);
-  } else if (stats) {
+  } else if (stats && devMode) {
     const s = document.createElement('div');
     s.className = 'muted';
     s.style.fontSize = '11px';
@@ -139,15 +153,6 @@ function activeCard(
   }
   const buttons = document.createElement('div');
   buttons.className = 'row';
-  const copy = document.createElement('button');
-  copy.className = 'btn btn-secondary';
-  copy.textContent = 'Copy meeting ID';
-  copy.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(active.meetingId);
-    copy.textContent = 'Copied';
-    setTimeout(() => (copy.textContent = 'Copy meeting ID'), 1200);
-  });
-  buttons.appendChild(copy);
   const open = document.createElement('button');
   open.className = 'btn';
   open.type = 'button';
@@ -218,28 +223,29 @@ function activeCard(
     card.appendChild(grant);
   }
 
-  // Demo path: ship 3 canned objections through the same pipeline the
-  // content-script caption capture would use. Lets the rep prove the
-  // coach loop end-to-end without depending on Meet's caption DOM.
-  const demo = document.createElement('button');
-  demo.className = 'btn btn-secondary';
-  demo.style.marginTop = '6px';
-  demo.textContent = 'Inject 3 demo objections';
-  demo.addEventListener('click', async () => {
-    demo.disabled = true;
-    demo.textContent = 'Shipping…';
-    const resp = (await chrome.runtime.sendMessage({
-      type: 'demo.injectCaptions',
-      meetingId: active.meetingId,
-    } satisfies RuntimeMessage)) as { ok: boolean; injected?: number; error?: string };
-    demo.disabled = false;
-    demo.textContent = resp?.ok
-      ? `Shipped ${resp.injected ?? 3} ✓`
-      : `Failed: ${resp?.error ?? 'unknown'}`;
-    setTimeout(() => (demo.textContent = 'Inject 3 demo objections'), 2400);
-    void render();
-  });
-  card.appendChild(demo);
+  // Demo path is dev-only — shipping canned objections to confirm the coach
+  // pipeline end-to-end. Confuses paying customers; gate behind localhost.
+  if (devMode) {
+    const demo = document.createElement('button');
+    demo.className = 'btn btn-secondary';
+    demo.style.marginTop = '6px';
+    demo.textContent = 'Inject 3 demo objections';
+    demo.addEventListener('click', async () => {
+      demo.disabled = true;
+      demo.textContent = 'Shipping…';
+      const resp = (await chrome.runtime.sendMessage({
+        type: 'demo.injectCaptions',
+        meetingId: active.meetingId,
+      } satisfies RuntimeMessage)) as { ok: boolean; injected?: number; error?: string };
+      demo.disabled = false;
+      demo.textContent = resp?.ok
+        ? `Shipped ${resp.injected ?? 3} ✓`
+        : `Failed: ${resp?.error ?? 'unknown'}`;
+      setTimeout(() => (demo.textContent = 'Inject 3 demo objections'), 2400);
+      void render();
+    });
+    card.appendChild(demo);
+  }
   return card;
 }
 
@@ -320,7 +326,7 @@ function signInCard(initial: ExtensionSettings): HTMLElement {
   return card;
 }
 
-function signedInCard(initial: ExtensionSettings): HTMLElement {
+function signedInCard(initial: ExtensionSettings, devMode: boolean): HTMLElement {
   const card = document.createElement('div');
   card.className = 'card stack';
   const heading = document.createElement('div');
@@ -330,29 +336,15 @@ function signedInCard(initial: ExtensionSettings): HTMLElement {
   const who = document.createElement('div');
   who.className = 'muted';
   who.style.fontSize = '11px';
-  who.textContent = initial.userEmail
-    ? `as ${initial.userEmail} — token auto-refreshes in the background`
-    : 'token auto-refreshes in the background';
+  who.textContent = initial.userEmail ? `as ${initial.userEmail}` : '';
   card.appendChild(who);
 
-  const ship = document.createElement('label');
-  ship.className = 'row';
-  ship.style.fontSize = '11px';
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
-  cb.checked = initial.shipCaptions;
-  ship.appendChild(cb);
-  ship.appendChild(document.createTextNode(' Ship Meet captions to api'));
-  card.appendChild(ship);
-
-  // Solo-test mode is dev-only. Hide it in builds that don't talk to a
-  // localhost gateway so paying customers can't accidentally enable it and
-  // pollute their own analytics.
-  const isDevGateway = /localhost|127\.0\.0\.1/.test(initial.gatewayUrl);
+  // Solo-test mode flips the gateway's diarization to classify every turn
+  // as customer so the coach fires during single-person dev tests. Dev-only.
   const soloCb = document.createElement('input');
   soloCb.type = 'checkbox';
   soloCb.checked = initial.forceCustomer === true;
-  if (isDevGateway) {
+  if (devMode) {
     const solo = document.createElement('label');
     solo.className = 'row';
     solo.style.fontSize = '11px';
@@ -365,20 +357,23 @@ function signedInCard(initial: ExtensionSettings): HTMLElement {
   const row = document.createElement('div');
   row.className = 'row';
   row.style.gap = '6px';
-  const save = document.createElement('button');
-  save.className = 'btn';
-  save.textContent = 'Save';
-  save.addEventListener('click', async () => {
-    save.textContent = 'Saving…';
-    await chrome.runtime.sendMessage({
-      type: 'settings.save',
-      settings: { ...initial, shipCaptions: cb.checked, forceCustomer: soloCb.checked },
-    } satisfies RuntimeMessage);
-    save.textContent = 'Saved';
-    setTimeout(() => (save.textContent = 'Save'), 1200);
-    void render();
-  });
-  row.appendChild(save);
+  // Save button only meaningful when there's a dev-mode toggle to persist.
+  if (devMode) {
+    const save = document.createElement('button');
+    save.className = 'btn';
+    save.textContent = 'Save';
+    save.addEventListener('click', async () => {
+      save.textContent = 'Saving…';
+      await chrome.runtime.sendMessage({
+        type: 'settings.save',
+        settings: { ...initial, forceCustomer: soloCb.checked },
+      } satisfies RuntimeMessage);
+      save.textContent = 'Saved';
+      setTimeout(() => (save.textContent = 'Save'), 1200);
+      void render();
+    });
+    row.appendChild(save);
+  }
   const out = document.createElement('button');
   out.className = 'btn btn-secondary';
   out.textContent = 'Sign out';
