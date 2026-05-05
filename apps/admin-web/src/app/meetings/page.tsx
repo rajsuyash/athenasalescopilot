@@ -43,7 +43,7 @@ export default async function MeetingsPage() {
     <Shell email={me.user.email} workspace={me.workspace.name}>
       <h1 className="text-2xl font-semibold tracking-tight mb-1">Meetings</h1>
       <p className="text-sm text-white/50 mb-6">
-        Hosted by you. Run <code className="text-white/70">athena listen --gateway</code> from the
+        Hosted by you. Open the <a className="text-accent underline" href="/install">Chrome extension</a> in a Google Meet, or run <code className="text-white/70">rocket listen --gateway</code> from the
         CLI or open the macOS overlay to capture more.
       </p>
 

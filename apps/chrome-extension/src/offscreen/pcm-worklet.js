@@ -1,5 +1,5 @@
 /**
- * Athena PCM encoder worklet.
+ * Rocket PCM encoder worklet.
  *
  * Receives Float32 audio frames from the AudioContext, downsamples to 16 kHz
  * via linear interpolation if the host context is at a higher rate, converts

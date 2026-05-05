@@ -13,7 +13,7 @@ export function Shell({ email, workspace, children }: ShellProps) {
       <header className="border-b border-white/5 bg-ink-900/60 backdrop-blur sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-6 py-3 flex items-center gap-6">
           <Link href="/dashboard" className="font-semibold tracking-tight text-accent">
-            Athena
+            Rocket<span className="text-white/60">.</span>
           </Link>
           <nav className="flex gap-4 text-sm text-white/70">
             <Link href="/dashboard" className="hover:text-white">Dashboard</Link>
@@ -46,7 +46,7 @@ export function Shell({ email, workspace, children }: ShellProps) {
       <main className="flex-1 max-w-5xl w-full mx-auto px-6 py-8">{children}</main>
       <footer className="border-t border-white/5 text-xs text-white/40 py-3">
         <div className="max-w-5xl mx-auto px-6 flex flex-wrap items-center gap-4">
-          <span>Athena · sales copilot · workspace admin</span>
+          <span>Rocket Sales Agent · workspace admin</span>
           <Link href="/privacy" className="ml-auto hover:text-white/70">
             Privacy
           </Link>

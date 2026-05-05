@@ -114,8 +114,9 @@ export default async function DashboardPage() {
           </div>
           {meetings.meetings.length === 0 ? (
             <p className="text-sm text-white/50">
-              No meetings yet. Run <code className="text-white/70">athena listen</code> from the CLI
-              or open the Mac overlay.
+              No meetings yet. Open the{' '}
+              <a className="underline" href="/install">Chrome extension</a> in a Google Meet, or
+              run <code className="text-white/70">rocket listen</code> from the CLI.
             </p>
           ) : (
             <ul className="space-y-2 text-sm">

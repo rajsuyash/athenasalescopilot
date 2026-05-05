@@ -89,7 +89,7 @@ export default async function AnalyticsPage() {
 
       {!adoption || !objections || !quality || !coverage ? (
         <div className="rounded bg-yellow-500/10 text-yellow-300 text-sm p-3">
-          analytics service unreachable — check `pnpm --filter @athena/analytics-service dev`.
+          Analytics service unreachable — try again in a moment.
         </div>
       ) : (
         <div className="space-y-8">

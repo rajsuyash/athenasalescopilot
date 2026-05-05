@@ -196,7 +196,7 @@ export function MeetingDetail({
             <div className="p-6 text-sm text-white/50">
               No transcript captured. Use{' '}
               <code className="text-white/70">
-                athena listen --gateway --meeting-id {meetingId}
+                rocket listen --gateway --meeting-id {meetingId}
               </code>{' '}
               to attach.
             </div>

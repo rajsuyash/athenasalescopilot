@@ -47,7 +47,7 @@ export default async function ScriptsPage() {
     <Shell email={me.user.email} workspace={me.workspace.name}>
       <h1 className="text-2xl font-semibold tracking-tight mb-1">Scripts</h1>
       <p className="text-sm text-white/50 mb-6">
-        Versioned playbooks. The published version is the one Athena grounds suggestions in
+        Versioned playbooks. The published version is the one Rocket grounds suggestions in
         during live calls.
       </p>
       <ScriptCollections initial={collections} canEdit={canEdit} />

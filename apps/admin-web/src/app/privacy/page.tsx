@@ -1,6 +1,6 @@
 import { PublicShell } from '@/components/PublicShell';
 
-export const metadata = { title: 'Privacy · Athena' };
+export const metadata = { title: 'Privacy · Rocket Sales Agent' };
 
 export default function PrivacyPage() {
   return (
@@ -10,10 +10,10 @@ export default function PrivacyPage() {
         <p className="text-white/50 text-xs mb-8">Last updated: 2026-05-05</p>
 
         <p>
-          Athena is a software-as-a-service product that provides real-time AI coaching for sales
-          calls held on Google Meet. This policy covers all Athena clients — the admin web app, the
-          Chrome extension (&quot;Athena Companion&quot;), the macOS desktop overlay, and the CLI.
-          By signing in to any Athena client you consent to the practices described here.
+          Rocket Sales Agent (&quot;Rocket&quot;) is a software-as-a-service product that provides
+          real-time AI coaching for sales calls held on Google Meet. This policy covers all Rocket
+          clients — the admin web app, the Chrome extension, the macOS desktop overlay, and the
+          CLI. By signing in to any Rocket client you consent to the practices described here.
         </p>
 
         <h2 className="text-lg font-semibold text-white mt-8 mb-2">What we collect</h2>
@@ -28,7 +28,7 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong>Meeting transcripts</strong> — speech-to-text output for calls you start with
-            Athena. Stored alongside the meeting record.
+            Rocket. Stored alongside the meeting record.
           </li>
           <li>
             <strong>Audio</strong> — by default we drop audio frames after speech-to-text processes
@@ -79,10 +79,10 @@ export default function PrivacyPage() {
         </p>
 
         <h2 className="text-lg font-semibold text-white mt-8 mb-2">
-          Athena Companion (Chrome extension) specifics
+          Rocket Chrome extension specifics
         </h2>
         <p>
-          The Chrome extension (&quot;Athena Companion&quot;) is one of several Athena clients. It
+          The Rocket Chrome extension is one of several Rocket clients. It
           captures Google Meet audio when — and only when — you explicitly start a session. The
           following clauses apply specifically to the extension:
         </p>
@@ -97,7 +97,7 @@ export default function PrivacyPage() {
 
         <h3 className="text-base font-semibold text-white mt-6 mb-2">Always-visible recording indicator</h3>
         <p>
-          A persistent <em>&quot;● Athena recording&quot;</em> pill is rendered inside the Google
+          A persistent <em>&quot;● Recording&quot;</em> pill is rendered inside the Google
           Meet tab for the entire duration of any active capture session. You always know when the
           extension is listening.
         </p>
@@ -121,8 +121,8 @@ export default function PrivacyPage() {
         </ul>
         <p className="mt-2">
           Audio is mixed locally in your browser and streamed in real time as 16 kHz PCM frames over
-          a secure WebSocket to Athena&apos;s realtime gateway, where it is transcribed and analyzed
-          by the Athena coach. No audio is captured outside an active capture session you have
+          a secure WebSocket to Rocket&apos;s realtime gateway, where it is transcribed and analyzed
+          by the Rocket coach. No audio is captured outside an active capture session you have
           explicitly started, and no audio is captured from any tab other than the Google Meet tab
           you are joined to.
         </p>
@@ -130,13 +130,13 @@ export default function PrivacyPage() {
         <h3 className="text-base font-semibold text-white mt-6 mb-2">Local storage by the extension</h3>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <strong>Authentication tokens</strong> — your Athena access token + refresh token are
+            <strong>Authentication tokens</strong> — your Rocket access token + refresh token are
             stored in <code>chrome.storage.local</code> for session continuity. Cleared on sign-out
             or extension uninstall.
           </li>
           <li>
             <strong>Notification mirror</strong> — up to the 200 most-recent workspace notifications
-            are mirrored locally for in-popup display. The source of truth lives in your Athena
+            are mirrored locally for in-popup display. The source of truth lives in your Rocket
             workspace.
           </li>
         </ul>
@@ -182,20 +182,20 @@ export default function PrivacyPage() {
 
         <h2 className="text-lg font-semibold text-white mt-8 mb-2">Cookies</h2>
         <p>
-          The Athena admin web app uses a single first-party httpOnly session cookie. No
+          The Rocket admin web app uses a single first-party httpOnly session cookie. No
           third-party advertising or tracking cookies. The extension does not set cookies.
         </p>
 
         <h2 className="text-lg font-semibold text-white mt-8 mb-2">Children</h2>
         <p>
-          Athena is not intended for use by children under 16, and we do not knowingly collect data
+          Rocket is not intended for use by children under 16, and we do not knowingly collect data
           from anyone in this age group.
         </p>
 
         <h2 className="text-lg font-semibold text-white mt-8 mb-2">Changes to this policy</h2>
         <p>
           We may update this policy from time to time. Material changes will be announced via the
-          Athena admin app and via the extension&apos;s listing on the Chrome Web Store.
+          Rocket admin app and via the extension&apos;s listing on the Chrome Web Store.
         </p>
 
         <h2 className="text-lg font-semibold text-white mt-8 mb-2">Contact</h2>

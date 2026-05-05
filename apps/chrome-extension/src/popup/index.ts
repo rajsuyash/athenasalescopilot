@@ -99,7 +99,7 @@ function activeCard(
   if (!active) {
     const empty = document.createElement('div');
     empty.className = 'card muted';
-    empty.textContent = 'No Google Meet detected. Open a meet.google.com tab to pair Athena.';
+    empty.textContent = 'No Google Meet detected. Open a meet.google.com tab to pair Rocket.';
     return empty;
   }
   const card = document.createElement('div');
@@ -158,7 +158,7 @@ function activeCard(
   const open = document.createElement('button');
   open.className = 'btn';
   open.type = 'button';
-  open.textContent = 'Open in Athena';
+  open.textContent = 'Open in Rocket';
   open.addEventListener('click', () => {
     void chrome.runtime
       .sendMessage({ type: 'panel.openInAthena' })
@@ -240,13 +240,13 @@ function signInCard(initialPrefs: PopupPrefs): HTMLElement {
   card.className = 'card stack';
   const heading = document.createElement('div');
   heading.style.fontWeight = '600';
-  heading.textContent = 'Sign in to Athena';
+  heading.textContent = 'Sign in to Rocket';
   card.appendChild(heading);
   const help = document.createElement('div');
   help.className = 'muted';
   help.style.fontSize = '11px';
   help.textContent =
-    'Sign in once with your Athena email + password. The extension will keep itself signed in and ship captions automatically.';
+    'Sign in once with your Rocket Sales Agent email + password. The extension will keep itself signed in and ship captions automatically.';
   card.appendChild(help);
 
   const email = labeledInput('Email', '', 'email');

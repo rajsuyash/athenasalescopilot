@@ -49,8 +49,9 @@ export function OnboardingBanner({ workspaceName }: OnboardingBannerProps) {
               <Arrow />
             </Link>
             <p className="mt-2 text-xs text-white/50">
-              Or run <code className="text-white/80">athena listen</code> from the CLI for a quick
-              test without the extension.
+              Already a Rocket CLI user? Run{' '}
+              <code className="text-white/80">rocket listen</code> for a quick test without the
+              extension.
             </p>
           </div>
         </li>
