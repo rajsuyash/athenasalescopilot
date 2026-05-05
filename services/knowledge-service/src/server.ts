@@ -66,6 +66,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(
     bmcRoutes({
       llm,
+      embeddings,
       anthropicApiKey: env.ANTHROPIC_API_KEY ?? '',
       anthropicModel: env.ANTHROPIC_MODEL,
     }),

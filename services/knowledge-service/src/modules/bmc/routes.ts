@@ -12,6 +12,7 @@
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import type { LlmClient } from '@athena/sdk-llm';
 import {
   BMC_SECTIONS,
@@ -23,9 +24,11 @@ import {
   type BmcSection,
 } from './service.js';
 import { generateScriptFromBmc } from './generator.js';
+import { indexBmcAsKnowledge } from './indexer.js';
 
 interface RouteDeps {
   llm: LlmClient;
+  embeddings: EmbeddingClient;
   anthropicApiKey: string;
   anthropicModel: string;
 }
@@ -42,6 +45,13 @@ const BuildBody = z.object({
 
 export function bmcRoutes(deps: RouteDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
+    // Stash indexer deps on the Fastify instance so `safeIndex` (a free
+    // function below) can read them off `req.server` without forcing every
+    // route handler to thread them through manually.
+    (app as unknown as { _bmcIndexerDeps: { embeddings: EmbeddingClient } })._bmcIndexerDeps = {
+      embeddings: deps.embeddings,
+    };
+
     app.get('/playbooks/bmc', async (req) => {
       const claims = await req.requirePermission('knowledge:read');
       const bmc = await getBmc(claims.workspaceId);
@@ -57,7 +67,13 @@ export function bmcRoutes(deps: RouteDeps) {
         data: cleaned,
         sourceType: body.sourceType,
       });
-      return { ok: true, version: r.version };
+      const indexed = await safeIndex(req, {
+        workspaceId: claims.workspaceId,
+        actorUserId: claims.sub,
+        data: cleaned,
+        version: r.version,
+      });
+      return { ok: true, version: r.version, indexed };
     });
 
     app.post('/playbooks/bmc/import', async (req, reply) => {
@@ -88,7 +104,19 @@ export function bmcRoutes(deps: RouteDeps) {
         data: extracted.data,
         sourceType: 'pdf',
       });
-      return { ok: true, version: r.version, data: extracted.data, confidence: extracted.confidence };
+      const indexed = await safeIndex(req, {
+        workspaceId: claims.workspaceId,
+        actorUserId: claims.sub,
+        data: extracted.data,
+        version: r.version,
+      });
+      return {
+        ok: true,
+        version: r.version,
+        data: extracted.data,
+        confidence: extracted.confidence,
+        indexed,
+      };
     });
 
     app.post('/playbooks/script/generate-from-bmc', async (req, reply) => {
@@ -154,8 +182,19 @@ export function bmcRoutes(deps: RouteDeps) {
           data: nextData,
           sourceType: 'interactive',
         });
+        const indexed = await safeIndex(req, {
+          workspaceId: claims.workspaceId,
+          actorUserId: claims.sub,
+          data: nextData,
+          version: saved.version,
+        });
         reply.raw.write(
-          `event: done\ndata: ${JSON.stringify({ section: body.section, text, version: saved.version })}\n\n`,
+          `event: done\ndata: ${JSON.stringify({
+            section: body.section,
+            text,
+            version: saved.version,
+            indexed,
+          })}\n\n`,
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : 'unknown';
@@ -167,6 +206,46 @@ export function bmcRoutes(deps: RouteDeps) {
       return reply;
     });
   };
+}
+
+/**
+ * Best-effort BMC retrieval indexing. Failures here must NEVER fail the user's
+ * BMC save — we log and return null so the caller still sees `ok: true`.
+ *
+ * Outer closure captures `deps.embeddings` so we can call this from any of the
+ * three save paths (PUT, /import, /build) without re-passing them every time.
+ */
+async function safeIndex(
+  req: FastifyRequest,
+  args: {
+    workspaceId: string;
+    actorUserId: string;
+    data: BmcData;
+    version: number;
+  },
+): Promise<{ indexed: number; skipped: number; failed: number } | null> {
+  // The route closure assigns `_indexerDeps` on `req.server` on first
+  // registration (see bmcRoutes). Direct DI keeps the helper pure-stateless.
+  const deps = (req.server as unknown as { _bmcIndexerDeps?: { embeddings: EmbeddingClient } })
+    ._bmcIndexerDeps;
+  if (!deps) return null;
+  try {
+    const r = await indexBmcAsKnowledge(args, deps);
+    if (r.failed.length > 0) {
+      req.log.warn(
+        { workspaceId: args.workspaceId, failed: r.failed },
+        'bmc indexer: some sections failed',
+      );
+    }
+    return {
+      indexed: r.indexed.length,
+      skipped: r.skipped.length,
+      failed: r.failed.length,
+    };
+  } catch (err) {
+    req.log.warn({ err, workspaceId: args.workspaceId }, 'bmc indexer threw');
+    return null;
+  }
 }
 
 function sanitizeData(raw: Record<string, string>): BmcData {

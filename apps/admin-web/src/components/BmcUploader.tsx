@@ -10,6 +10,7 @@ interface ImportResponse {
   version: number;
   data: Record<string, string>;
   confidence: number;
+  indexed?: { indexed: number; skipped: number; failed: number } | null;
 }
 
 interface GenerateResponse {
@@ -121,6 +122,14 @@ export function BmcUploader() {
             BMC extracted with confidence{' '}
             <strong>{(extracted.confidence * 100).toFixed(0)}%</strong>. Review the sections
             below, then generate the script.
+            {extracted.indexed && extracted.indexed.indexed > 0 ? (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] text-emerald-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                Indexed for retrieval · {extracted.indexed.indexed}/
+                {extracted.indexed.indexed + extracted.indexed.skipped + extracted.indexed.failed}
+                {' sections'}
+              </div>
+            ) : null}
           </div>
           <div className="rounded-lg border border-white/10 bg-ink-900/40 divide-y divide-white/5 max-h-[420px] overflow-y-auto">
             {Object.entries(SECTION_LABELS).map(([key, label]) => {
