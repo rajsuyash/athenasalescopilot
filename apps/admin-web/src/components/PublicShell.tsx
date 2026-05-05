@@ -44,14 +44,26 @@ function FloatingNav() {
             : 'w-[min(96%,1240px)] bg-ink-900/35 border-white/5 backdrop-blur-md'}
           rounded-2xl border px-4 sm:px-5 py-2.5`}
       >
-        {/* Three-zone CSS grid — bulletproof against margin-auto fights.
-            auto | 1fr | auto = brand sits left, nav centers in 1fr, right
-            cluster sits flush right and ALWAYS renders in-bounds. */}
-        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4">
+        {/* Layout: flex with mr-auto on the brand. When the center nav is
+            hidden (<lg) the brand's mr-auto pushes the right cluster to
+            the pill edge. When the center nav is visible (lg+), it has
+            flex-1 and absorbs the slack, again pushing the cluster to
+            the right.
+
+            Why not `justify-between`? Because the BrandLink's actual
+            width depends on font load timing — between hydration ticks,
+            the brand can briefly be a different width and shift content.
+            The flex-grow approach is stable across loads.
+
+            Right cluster has `min-w-fit` so it can NEVER shrink below
+            its content width — even if the nav grew unexpectedly large,
+            Sign in + Get started would push the nav to wrap, not get
+            clipped. */}
+        <div className="flex items-center gap-4">
           {/* Brand */}
           <Link
             href="/"
-            className="group flex items-center gap-2 font-semibold tracking-tight"
+            className="group flex items-center gap-2 font-semibold tracking-tight mr-auto lg:mr-0"
           >
             <BrandMark />
             <span className="text-white/90 group-hover:text-white transition-colors">
@@ -59,19 +71,17 @@ function FloatingNav() {
             </span>
           </Link>
 
-          {/* Center nav — hidden on small screens, justified-center inside the
-              1fr middle column so it stays visually balanced regardless of
-              brand or right-cluster widths. */}
-          <nav className="hidden lg:flex items-center justify-center gap-0.5 text-sm text-white/65">
+          {/* Center nav — hidden on small screens, takes all slack on lg+ */}
+          <nav className="hidden lg:flex flex-1 items-center justify-center gap-0.5 text-sm text-white/65">
             <NavLink href="/#how">How it works</NavLink>
             <NavLink href="/#features">Features</NavLink>
             <NavLink href="/#pricing">Pricing</NavLink>
             <NavLink href="/install">Install</NavLink>
           </nav>
 
-          {/* Right cluster — Sign in + Get started, always visible because
-              its grid column is `auto` (sized to its content). */}
-          <div className="flex items-center gap-2 text-sm">
+          {/* Right cluster — Sign in + Get started. min-w-fit + flex-shrink-0
+              guarantees they never get squeezed off the pill edge. */}
+          <div className="flex items-center gap-2 text-sm flex-shrink-0 min-w-fit">
             <Link
               href="/signin"
               className="px-3 py-1.5 text-white/85 hover:text-white hover:bg-white/5 rounded-md transition-colors"
