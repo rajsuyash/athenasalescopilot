@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     'Step-by-step install guide for the Rocket Sales Agent Chrome extension. Sideload the .zip while we wait for Web Store approval.',
 };
 
-const EXT_VERSION = '0.1.6';
+const EXT_VERSION = '0.1.7';
 const ZIP_HREF = `/downloads/rocket-sales-agent-${EXT_VERSION}.zip`;
 const ZIP_SIZE_KB = 25;
 const WEB_STORE_URL =
@@ -82,7 +82,7 @@ export default function InstallPage() {
                 <span>Download .zip ({ZIP_SIZE_KB} KB)</span>
               </a>
               <p className="mt-2 text-center text-[11px] text-white/40">
-                v{EXT_VERSION} · Manifest V3 · Rebrand to Rocket · Liquid-glass popup
+                v{EXT_VERSION} · Top-stack overlay fix · Rebrand to Rocket
               </p>
             </div>
           </div>

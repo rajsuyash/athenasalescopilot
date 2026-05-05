@@ -927,22 +927,46 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
   });
   void (async () => {
     const active = await getActive();
-    if (!active || active.tabId < 0) return;
-    try {
-      await chrome.tabs.sendMessage(
-        active.tabId,
-        { type: 'overlay.suggestion', suggestion: clean },
-        { frameId: 0 },
-      );
-    } catch {
+    const payload = { type: 'overlay.suggestion', suggestion: clean };
+
+    // Try the cached active tab first — fastest, most common case.
+    if (active && active.tabId >= 0) {
       try {
-        await chrome.tabs.sendMessage(active.tabId, {
-          type: 'overlay.suggestion',
-          suggestion: clean,
-        });
+        await chrome.tabs.sendMessage(active.tabId, payload, { frameId: 0 });
+        return;
       } catch {
-        log.warn('[athena-bg] overlay relay failed');
+        try {
+          await chrome.tabs.sendMessage(active.tabId, payload);
+          return;
+        } catch {
+          log.debug('[rocket-bg] active tab relay failed; falling back to broadcast');
+        }
       }
+    }
+
+    // Fallback: stale tabId (Meet refreshed mid-call, tab got swapped, etc).
+    // Broadcast to any open meet.google.com tab so the rep still sees the
+    // suggestion. Cheap — there's almost always at most one Meet tab.
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://meet.google.com/*' });
+      if (tabs.length === 0) {
+        log.warn('[rocket-bg] overlay relay: no meet.google.com tab open');
+        return;
+      }
+      for (const t of tabs) {
+        if (typeof t.id !== 'number') continue;
+        try {
+          await chrome.tabs.sendMessage(t.id, payload, { frameId: 0 });
+        } catch {
+          try {
+            await chrome.tabs.sendMessage(t.id, payload);
+          } catch {
+            /* keep trying others */
+          }
+        }
+      }
+    } catch (err) {
+      log.warn('[rocket-bg] overlay relay broadcast failed', err);
     }
   })();
 });

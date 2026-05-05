@@ -141,7 +141,9 @@ function ensureOverlayRoot(): HTMLDivElement {
     'display:flex',
     'flex-direction:column-reverse',
     'gap:10px',
-    'overflow:hidden',
+    // No overflow:hidden — column-reverse + dynamic appendChild has a
+    // long-standing Chrome layout quirk where the visually-first child
+    // gets clipped to 0 height on insert. We cap card count via JS instead.
     // Container is click-through; only buttons inside cards opt back in.
     'pointer-events:none',
     'font-family:Inter,-apple-system,system-ui,sans-serif',
@@ -280,11 +282,21 @@ chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: Overlay
     // for the rep to scroll back through. Toast only renders when there's
     // something speakable on the card; otherwise we'd flash an empty box.
     panel.add(msg.suggestion);
-    if (msg.suggestion.answerText || msg.suggestion.followupText) {
+    const speakable = !!(msg.suggestion.answerText || msg.suggestion.followupText);
+    // Lightweight tap so reps + support can verify in DevTools that the
+    // gateway → SW → content-script pipe is alive.
+    // eslint-disable-next-line no-console
+    console.debug('[rocket-content] overlay.suggestion', {
+      type: msg.suggestion.type,
+      hasAnswer: !!msg.suggestion.answerText,
+      hasFollowup: !!msg.suggestion.followupText,
+      speakable,
+    });
+    if (speakable) {
       renderSuggestion(msg.suggestion);
     }
   } catch (err) {
-    console.warn('[athena-content] overlay render failed', err);
+    console.warn('[rocket-content] overlay render failed', err);
   }
 });
 
