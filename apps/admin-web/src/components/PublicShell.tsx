@@ -44,25 +44,34 @@ function FloatingNav() {
             : 'w-[min(96%,1240px)] bg-ink-900/35 border-white/5 backdrop-blur-md'}
           rounded-2xl border px-4 sm:px-5 py-2.5`}
       >
-        <div className="flex items-center gap-4">
+        {/* Three-zone CSS grid — bulletproof against margin-auto fights.
+            auto | 1fr | auto = brand sits left, nav centers in 1fr, right
+            cluster sits flush right and ALWAYS renders in-bounds. */}
+        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4">
           {/* Brand */}
-          <Link href="/" className="group flex items-center gap-2 font-semibold tracking-tight flex-shrink-0">
+          <Link
+            href="/"
+            className="group flex items-center gap-2 font-semibold tracking-tight"
+          >
             <BrandMark />
             <span className="text-white/90 group-hover:text-white transition-colors">
               Rocket<span className="text-accent">.</span>
             </span>
           </Link>
 
-          {/* Center nav — hidden on small screens */}
-          <nav className="hidden lg:flex items-center gap-0.5 mx-auto text-sm text-white/65">
+          {/* Center nav — hidden on small screens, justified-center inside the
+              1fr middle column so it stays visually balanced regardless of
+              brand or right-cluster widths. */}
+          <nav className="hidden lg:flex items-center justify-center gap-0.5 text-sm text-white/65">
             <NavLink href="/#how">How it works</NavLink>
             <NavLink href="/#features">Features</NavLink>
             <NavLink href="/#pricing">Pricing</NavLink>
             <NavLink href="/install">Install</NavLink>
           </nav>
 
-          {/* Right cluster — Sign in + Get started, always visible */}
-          <div className="ml-auto lg:ml-0 flex items-center gap-2 text-sm flex-shrink-0">
+          {/* Right cluster — Sign in + Get started, always visible because
+              its grid column is `auto` (sized to its content). */}
+          <div className="flex items-center gap-2 text-sm">
             <Link
               href="/signin"
               className="px-3 py-1.5 text-white/85 hover:text-white hover:bg-white/5 rounded-md transition-colors"
