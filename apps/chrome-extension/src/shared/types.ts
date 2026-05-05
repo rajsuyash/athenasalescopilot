@@ -20,6 +20,7 @@ export type RuntimeMessage =
   | { type: 'settings.save'; prefs: PopupPrefs }
   | { type: 'inbox.markRead'; id: string }
   | { type: 'auth.login'; email: string; password: string; workspaceSlug?: string }
+  | { type: 'auth.pair'; code: string }
   | { type: 'auth.logout' }
   | { type: 'demo.injectCaptions'; meetingId: string }
   | { type: 'capture.start' }

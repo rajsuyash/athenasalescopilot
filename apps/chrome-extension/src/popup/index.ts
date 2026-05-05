@@ -249,13 +249,71 @@ function signInCard(initialPrefs: PopupPrefs): HTMLElement {
     'Sign in once with your Rocket Sales Agent email + password. The extension will keep itself signed in and ship captions automatically.';
   card.appendChild(help);
 
-  const email = labeledInput('Email', '', 'email');
-  card.appendChild(email.wrap);
-  const password = labeledInput('Password', '', 'password');
-  card.appendChild(password.wrap);
-  const slug = labeledInput('Workspace slug (optional)', '');
-  card.appendChild(slug.wrap);
+  // ─── Mode toggle: password vs pairing-code ────────────────────────────
+  // Google/OAuth signups have no password. They mint a one-time pairing code
+  // on admin-web (/connect-extension) and paste it here.
+  let mode: 'password' | 'pair' = 'password';
+  const tabRow = document.createElement('div');
+  tabRow.className = 'row';
+  tabRow.style.gap = '4px';
+  tabRow.style.marginTop = '4px';
+  const tabPwd = document.createElement('button');
+  tabPwd.className = 'btn btn-secondary';
+  tabPwd.style.fontSize = '11px';
+  tabPwd.style.padding = '4px 8px';
+  tabPwd.textContent = 'Password';
+  const tabCode = document.createElement('button');
+  tabCode.className = 'btn btn-secondary';
+  tabCode.style.fontSize = '11px';
+  tabCode.style.padding = '4px 8px';
+  tabCode.textContent = 'Pairing code';
+  tabRow.appendChild(tabPwd);
+  tabRow.appendChild(tabCode);
+  card.appendChild(tabRow);
 
+  const passwordPane = document.createElement('div');
+  passwordPane.className = 'stack';
+  const codePane = document.createElement('div');
+  codePane.className = 'stack';
+  codePane.style.display = 'none';
+  card.appendChild(passwordPane);
+  card.appendChild(codePane);
+
+  const setMode = (next: 'password' | 'pair'): void => {
+    mode = next;
+    passwordPane.style.display = mode === 'password' ? '' : 'none';
+    codePane.style.display = mode === 'pair' ? '' : 'none';
+    tabPwd.style.opacity = mode === 'password' ? '1' : '0.5';
+    tabCode.style.opacity = mode === 'pair' ? '1' : '0.5';
+    error.textContent = '';
+  };
+  tabPwd.addEventListener('click', () => setMode('password'));
+  tabCode.addEventListener('click', () => setMode('pair'));
+
+  // ─── Password pane ────────────────────────────────────────────────────
+  const email = labeledInput('Email', '', 'email');
+  passwordPane.appendChild(email.wrap);
+  const password = labeledInput('Password', '', 'password');
+  passwordPane.appendChild(password.wrap);
+  const slug = labeledInput('Workspace slug (optional)', '');
+  passwordPane.appendChild(slug.wrap);
+
+  // ─── Pairing-code pane ────────────────────────────────────────────────
+  const codeHelp = document.createElement('div');
+  codeHelp.className = 'muted';
+  codeHelp.style.fontSize = '11px';
+  codeHelp.innerHTML =
+    'Signed up with Google? Visit <a href="https://rocketsalesagent.com/connect-extension" target="_blank" rel="noopener" style="color:#34D399">rocketsalesagent.com/connect-extension</a> to mint a 10-minute pairing code, then paste it here.';
+  codePane.appendChild(codeHelp);
+  const codeInput = labeledInput('Pairing code (ATH-XXXX-XXXX)', '');
+  codeInput.input.style.fontFamily = 'ui-monospace, monospace';
+  codeInput.input.style.letterSpacing = '0.1em';
+  codeInput.input.placeholder = 'ATH-A3F7-9KP2';
+  codeInput.input.autocapitalize = 'characters';
+  codeInput.input.spellcheck = false;
+  codePane.appendChild(codeInput.wrap);
+
+  // ─── Shared controls ──────────────────────────────────────────────────
   const ship = document.createElement('label');
   ship.className = 'row';
   ship.style.fontSize = '11px';
@@ -276,26 +334,46 @@ function signInCard(initialPrefs: PopupPrefs): HTMLElement {
   submit.textContent = 'Sign in';
   submit.addEventListener('click', async () => {
     error.textContent = '';
-    const e = email.input.value.trim();
-    const p = password.input.value;
-    const s = slug.input.value.trim();
-    if (!e || !p) {
-      error.textContent = 'Email + password are required.';
-      return;
-    }
-    submit.textContent = 'Signing in…';
     submit.disabled = true;
-    // Persist shipCaptions toggle alongside the login.
+    submit.textContent = 'Signing in…';
+
+    // Persist shipCaptions toggle alongside the login regardless of mode.
     await chrome.runtime.sendMessage({
       type: 'settings.save',
       prefs: { ...initialPrefs, shipCaptions: cb.checked },
     } satisfies RuntimeMessage);
-    const resp = (await chrome.runtime.sendMessage({
-      type: 'auth.login',
-      email: e,
-      password: p,
-      ...(s ? { workspaceSlug: s } : {}),
-    } satisfies RuntimeMessage)) as { ok: boolean; error?: string };
+
+    let resp: { ok: boolean; error?: string };
+    if (mode === 'password') {
+      const e = email.input.value.trim();
+      const p = password.input.value;
+      const s = slug.input.value.trim();
+      if (!e || !p) {
+        error.textContent = 'Email + password are required.';
+        submit.disabled = false;
+        submit.textContent = 'Sign in';
+        return;
+      }
+      resp = (await chrome.runtime.sendMessage({
+        type: 'auth.login',
+        email: e,
+        password: p,
+        ...(s ? { workspaceSlug: s } : {}),
+      } satisfies RuntimeMessage)) as { ok: boolean; error?: string };
+    } else {
+      const code = codeInput.input.value.trim().toUpperCase();
+      if (!/^ATH-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) {
+        error.textContent = 'Code must look like ATH-XXXX-XXXX.';
+        submit.disabled = false;
+        submit.textContent = 'Sign in';
+        return;
+      }
+      resp = (await chrome.runtime.sendMessage({
+        type: 'auth.pair',
+        code,
+      } satisfies RuntimeMessage)) as { ok: boolean; error?: string };
+    }
+
     submit.disabled = false;
     submit.textContent = 'Sign in';
     if (!resp?.ok) {
@@ -305,6 +383,8 @@ function signInCard(initialPrefs: PopupPrefs): HTMLElement {
     void render();
   });
   card.appendChild(submit);
+
+  setMode('password');
   return card;
 }
 

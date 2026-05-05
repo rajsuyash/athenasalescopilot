@@ -1147,6 +1147,72 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
           error: err instanceof Error ? err.message : 'sign-in failed',
         });
       }
+    } else if (msg.type === 'auth.pair') {
+      // Exchange a one-time pairing code minted on admin-web for the same
+      // {accessToken, refreshToken, expiresAt} bundle that auth.login returns.
+      // Closes the gap for Google-OAuth users with no email+password.
+      if (!isPrivilegedSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
+      try {
+        const settings = await getSettings();
+        const r = await fetch(`${settings.apiUrl}/v1/auth/extension/pair-claim`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ code: msg.code }),
+        });
+        const body = (await r.json().catch(() => ({}))) as
+          | (LoginResponseBody & { error?: string; message?: string; user?: { email?: string } })
+          | undefined;
+        if (!r.ok || !body?.accessToken) {
+          sendResponse({
+            ok: false,
+            error: body?.message ?? `pair-claim failed (HTTP ${r.status})`,
+          });
+          return;
+        }
+        await writeState({
+          settings: {
+            ...settings,
+            accessToken: body.accessToken,
+            refreshToken: body.refreshToken,
+            expiresAt: body.expiresAt,
+            // The pair-claim response doesn't echo email; fetch it via /auth/me
+            // best-effort so the popup shows "as <email>" instead of blank.
+            userEmail: body.user?.email ?? settings.userEmail,
+          },
+          captionStats: null,
+        });
+        // Hydrate user email from /auth/me if pair-claim didn't include it.
+        if (!body.user?.email) {
+          void fetch(`${settings.apiUrl}/v1/auth/me`, {
+            headers: { authorization: `Bearer ${body.accessToken}` },
+          })
+            .then(async (res) => {
+              if (!res.ok) return;
+              const me = (await res.json().catch(() => null)) as
+                | { user?: { email?: string } }
+                | null;
+              if (me?.user?.email) {
+                const cur = await getSettings();
+                await writeState({
+                  settings: { ...cur, userEmail: me.user.email },
+                });
+              }
+            })
+            .catch(() => undefined);
+        }
+        void ensureInboxPolling();
+        void pollInbox();
+        void flushBuffers();
+        sendResponse({ ok: true });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : 'pair-claim failed',
+        });
+      }
     } else if (msg.type === 'auth.logout') {
       if (!isPrivilegedSender(sender)) {
         sendResponse({ ok: false, error: 'untrusted_sender' });
