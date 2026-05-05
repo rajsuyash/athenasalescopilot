@@ -34,36 +34,23 @@ function FloatingNav() {
         className="fixed top-0 left-0 right-0 z-50 h-[2px] origin-left bg-gradient-to-r from-accent via-electric-400 to-violet-400"
         aria-hidden="true"
       />
+      {/* Top bar — full-width, always-visible. Three zones via flex with
+          margin-auto on the brand. CSS is plain and stable; no fragile
+          width math. */}
       <motion.header
-        initial={{ y: -16, opacity: 0 }}
+        initial={{ y: -12, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
-        className={`fixed top-3 left-1/2 -translate-x-1/2 z-40 transition-all duration-500
+        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1], delay: 0.05 }}
+        className={`fixed top-0 inset-x-0 z-40 transition-colors duration-300
           ${scrolled
-            ? 'w-[min(96%,1140px)] bg-ink-900/75 border-white/10 shadow-glow-soft backdrop-blur-2xl'
-            : 'w-[min(96%,1240px)] bg-ink-900/35 border-white/5 backdrop-blur-md'}
-          rounded-2xl border px-4 sm:px-5 py-2.5`}
+            ? 'bg-ink-900/85 border-b border-white/10 shadow-glow-soft backdrop-blur-2xl'
+            : 'bg-ink-900/40 border-b border-white/5 backdrop-blur-md'}`}
       >
-        {/* Layout: flex with mr-auto on the brand. When the center nav is
-            hidden (<lg) the brand's mr-auto pushes the right cluster to
-            the pill edge. When the center nav is visible (lg+), it has
-            flex-1 and absorbs the slack, again pushing the cluster to
-            the right.
-
-            Why not `justify-between`? Because the BrandLink's actual
-            width depends on font load timing — between hydration ticks,
-            the brand can briefly be a different width and shift content.
-            The flex-grow approach is stable across loads.
-
-            Right cluster has `min-w-fit` so it can NEVER shrink below
-            its content width — even if the nav grew unexpectedly large,
-            Sign in + Get started would push the nav to wrap, not get
-            clipped. */}
-        <div className="flex items-center gap-4">
-          {/* Brand */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
+          {/* Brand — left */}
           <Link
             href="/"
-            className="group flex items-center gap-2 font-semibold tracking-tight mr-auto lg:mr-0"
+            className="group flex items-center gap-2 font-semibold tracking-tight"
           >
             <BrandMark />
             <span className="text-white/90 group-hover:text-white transition-colors">
@@ -71,20 +58,21 @@ function FloatingNav() {
             </span>
           </Link>
 
-          {/* Center nav — hidden on small screens, takes all slack on lg+ */}
-          <nav className="hidden lg:flex flex-1 items-center justify-center gap-0.5 text-sm text-white/65">
+          {/* Center nav — hidden on small screens. mx-auto centers it within
+              the remaining flex slack between brand and right cluster. */}
+          <nav className="hidden md:flex items-center gap-0.5 mx-auto text-sm text-white/65">
             <NavLink href="/#how">How it works</NavLink>
             <NavLink href="/#features">Features</NavLink>
             <NavLink href="/#pricing">Pricing</NavLink>
             <NavLink href="/install">Install</NavLink>
           </nav>
 
-          {/* Right cluster — Sign in + Get started. min-w-fit + flex-shrink-0
-              guarantees they never get squeezed off the pill edge. */}
-          <div className="flex items-center gap-2 text-sm flex-shrink-0 min-w-fit">
+          {/* Right cluster — Sign in + Get started. ml-auto so it sticks to
+              the right whether or not the nav renders. */}
+          <div className="flex items-center gap-2 text-sm ml-auto md:ml-0">
             <Link
               href="/signin"
-              className="px-3 py-1.5 text-white/85 hover:text-white hover:bg-white/5 rounded-md transition-colors"
+              className="px-3 py-1.5 text-white/90 hover:text-white hover:bg-white/5 rounded-md transition-colors"
             >
               Sign in
             </Link>
