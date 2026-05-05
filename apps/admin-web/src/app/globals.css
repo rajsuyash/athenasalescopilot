@@ -8,10 +8,136 @@
 
 html, body {
   height: 100%;
-  background-color: #0b0f17;
+  background-color: #05080d;
   color: #e5e7eb;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  font-feature-settings: "rlig" 1, "calt" 1;
+  font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+  letter-spacing: -0.005em;
+}
+
+/* Default container — vertical content wrapper used by the landing page. */
+.shell {
+  isolation: isolate;
+}
+
+/* Ambient mesh background painted under the entire viewport. Sits at z-0
+   under the page content. The orbs animate via the keyframes registered
+   in tailwind.config.ts. */
+.ambient-canvas {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+/* Subtle grid-line overlay — 1px lines every 56px, fading to transparent. */
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent 70%);
+}
+
+/* Noise texture for film-grain — sells the "premium" feel. */
+.noise-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.4;
+  mix-blend-mode: overlay;
+}
+
+/* Animated gradient text — used for the hero's accent words. */
+.text-gradient {
+  background: linear-gradient(120deg, #6ee7b7 0%, #7dd3fc 40%, #c084fc 80%, #6ee7b7 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: text-shift 8s ease-in-out infinite;
+}
+
+@keyframes text-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50%      { background-position: 100% 50%; }
+}
+
+/* Conic-gradient border on cards. Animates around the card perimeter when
+   the card is hovered. Combined with a `before` pseudo-element under the
+   real content, masked by border-radius. */
+.aurora-border {
+  position: relative;
+  isolation: isolate;
+}
+.aurora-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--angle, 0deg),
+    transparent 0deg, transparent 40deg,
+    rgba(110,231,183,0.7) 100deg,
+    rgba(125,211,252,0.6) 180deg,
+    rgba(168,85,247,0.6) 260deg,
+    transparent 320deg, transparent 360deg);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 400ms ease;
+  z-index: -1;
+}
+.aurora-border:hover::before {
+  opacity: 1;
+  animation: spin-angle 4s linear infinite;
+}
+
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes spin-angle {
+  to { --angle: 360deg; }
+}
+
+/* Glass card — used in feature bento + pricing tiers. */
+.glass {
+  background: linear-gradient(180deg, rgba(21,32,49,0.6) 0%, rgba(11,15,23,0.5) 100%);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Skip mesh + heavy animations when the user prefers reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .aurora-border::before { display: none; }
+}
+
+/* Existing prose-invert class used by /privacy + /terms — keep contract. */
+.prose-invert h1, .prose-invert h2, .prose-invert h3 {
+  color: #f8fafc;
+}
+.prose-invert a {
+  color: #6ee7b7;
 }
