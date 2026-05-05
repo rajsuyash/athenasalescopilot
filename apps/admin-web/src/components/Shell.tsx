@@ -22,8 +22,23 @@ export function Shell({ email, workspace, children }: ShellProps) {
             <Link href="/settings" className="hover:text-white">Settings</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-white/50">
+            {/* Persistent install CTA — visible on every signed-in page until
+                the Web Store listing publishes. Drives sign-ups straight to
+                the sideload guide where the .zip lives. */}
+            <Link
+              href="/install"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 text-accent px-2.5 py-1 text-[11px] font-medium hover:bg-accent/15 hover:border-accent/50 transition-colors"
+              title="Download the Chrome extension"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Install extension
+            </Link>
             {workspace ? <span>{workspace}</span> : null}
-            {email ? <span className="hidden sm:inline">{email}</span> : null}
+            {email ? <span className="hidden md:inline">{email}</span> : null}
             <UserButton />
           </div>
         </div>
