@@ -61,7 +61,7 @@ function inboxRow(n: InboxNotification): HTMLElement {
   const row = document.createElement('div');
   row.className = 'stack';
   row.style.gap = '2px';
-  row.style.borderTop = '1px solid var(--border)';
+  row.style.borderTop = '1px solid rgba(255,255,255,0.08)';
   row.style.paddingTop = '6px';
   const title = document.createElement('div');
   title.style.fontSize = '12px';
