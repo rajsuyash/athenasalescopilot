@@ -40,35 +40,41 @@ function FloatingNav() {
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
         className={`fixed top-3 left-1/2 -translate-x-1/2 z-40 transition-all duration-500
           ${scrolled
-            ? 'w-[min(92%,920px)] bg-ink-900/70 border-white/10 shadow-glow-soft backdrop-blur-2xl'
-            : 'w-[min(94%,1080px)] bg-ink-900/30 border-white/5 backdrop-blur-md'}
-          rounded-2xl border px-5 py-3`}
+            ? 'w-[min(96%,1140px)] bg-ink-900/75 border-white/10 shadow-glow-soft backdrop-blur-2xl'
+            : 'w-[min(96%,1240px)] bg-ink-900/35 border-white/5 backdrop-blur-md'}
+          rounded-2xl border px-4 sm:px-5 py-2.5`}
       >
-        <div className="flex items-center gap-6">
-          <Link href="/" className="group flex items-center gap-2 font-semibold tracking-tight">
+        <div className="flex items-center gap-4">
+          {/* Brand */}
+          <Link href="/" className="group flex items-center gap-2 font-semibold tracking-tight flex-shrink-0">
             <BrandMark />
             <span className="text-white/90 group-hover:text-white transition-colors">
               Rocket<span className="text-accent">.</span>
             </span>
           </Link>
-          <nav className="hidden md:flex items-center gap-1 ml-3 text-sm text-white/60">
+
+          {/* Center nav — hidden on small screens */}
+          <nav className="hidden lg:flex items-center gap-0.5 mx-auto text-sm text-white/65">
             <NavLink href="/#how">How it works</NavLink>
             <NavLink href="/#features">Features</NavLink>
             <NavLink href="/#pricing">Pricing</NavLink>
+            <NavLink href="/install">Install</NavLink>
           </nav>
-          <div className="ml-auto flex items-center gap-2 text-sm">
+
+          {/* Right cluster — Sign in + Get started, always visible */}
+          <div className="ml-auto lg:ml-0 flex items-center gap-2 text-sm flex-shrink-0">
             <Link
               href="/signin"
-              className="hidden sm:inline-flex px-3 py-1.5 text-white/70 hover:text-white transition-colors"
+              className="px-3 py-1.5 text-white/85 hover:text-white hover:bg-white/5 rounded-md transition-colors"
             >
               Sign in
             </Link>
             <Link
               href="/signin?mode=signup"
-              className="group relative inline-flex items-center gap-1.5 rounded-lg bg-accent text-ink-900 font-semibold px-4 py-2 shadow-glow-mint hover:shadow-glow-mint hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
+              className="group relative inline-flex items-center gap-1.5 rounded-lg bg-accent text-ink-900 font-semibold px-3.5 py-1.5 shadow-glow-mint hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200"
             >
               <span>Get started</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <ArrowRight className="w-3.5 h-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
             </Link>
           </div>
         </div>
@@ -128,6 +134,7 @@ export function PublicFooter() {
             <li><Link href="/#features" className="hover:text-white transition-colors">Features</Link></li>
             <li><Link href="/#how" className="hover:text-white transition-colors">How it works</Link></li>
             <li><Link href="/#pricing" className="hover:text-white transition-colors">Pricing</Link></li>
+            <li><Link href="/install" className="hover:text-white transition-colors">Install for Chrome</Link></li>
           </ul>
         </div>
         <div>

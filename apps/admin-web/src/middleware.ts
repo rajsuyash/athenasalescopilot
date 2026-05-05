@@ -9,6 +9,7 @@ const isPublic = createRouteMatcher([
   '/signup(.*)',
   '/privacy',
   '/terms',
+  '/install',
   '/extension-auth(.*)',
 ]);
 

@@ -66,7 +66,7 @@ export function Hero() {
             className="mt-8 flex flex-wrap items-center gap-3"
           >
             <PrimaryCta href="/signin?mode=signup">Start free — no card</PrimaryCta>
-            <SecondaryCta href="#how">Watch how it works</SecondaryCta>
+            <SecondaryCta href="/install">Install for Chrome</SecondaryCta>
           </motion.div>
 
           <motion.p
