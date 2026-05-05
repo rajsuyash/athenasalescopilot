@@ -327,7 +327,7 @@ function ensurePillRoot(): void {
   dot.style.cssText =
     'width:8px;height:8px;border-radius:999px;background:#F87171;box-shadow:0 0 8px rgba(248,113,113,0.7);animation:athena-pulse 1.5s infinite';
   pill.appendChild(dot);
-  pill.appendChild(document.createTextNode('Athena recording'));
+  pill.appendChild(document.createTextNode('Rocket recording'));
   document.documentElement.appendChild(pill);
 
   // Pulse keyframes — appended once per page.

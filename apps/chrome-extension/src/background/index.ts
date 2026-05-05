@@ -64,6 +64,26 @@ function isPrivilegedSender(sender: chrome.runtime.MessageSender): boolean {
   return true;
 }
 
+/**
+ * Looser gate for messages that LEGITIMATELY come from our content script in
+ * a Meet tab (e.g. the in-Meet panel's "Open meeting in Rocket" link). The
+ * content script always has `sender.tab` set, so isPrivilegedSender rejects
+ * it. We still verify the message originated from this very extension and
+ * from a meet.google.com URL — Meet pages can postMessage but cannot forge
+ * a chrome.runtime.sendMessage with our extension's runtime id.
+ */
+function isMeetContentSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  if (!sender.tab) return false;
+  const url = sender.url ?? sender.tab.url ?? '';
+  try {
+    const u = new URL(url);
+    return u.hostname === 'meet.google.com';
+  } catch {
+    return false;
+  }
+}
+
 async function readState(): Promise<PersistedState> {
   const got = (await chrome.storage.local.get('state')) as {
     state?: Partial<PersistedState>;
@@ -867,7 +887,9 @@ function adminWebBaseUrl(apiUrl: string): string | null {
 }
 
 chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
-  if (!isPrivilegedSender(sender)) return;
+  // Originates from the in-Meet content-script panel — not the popup/offscreen,
+  // so isPrivilegedSender (which rejects sender.tab) would have dropped it.
+  if (!isMeetContentSender(sender)) return;
   const m = raw as { type?: string };
   if (m?.type !== 'panel.openInAthena') return;
   void (async () => {

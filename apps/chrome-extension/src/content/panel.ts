@@ -185,7 +185,7 @@ function buildTree(root: ShadowRoot): void {
   btn.className = 'btn';
   btn.type = 'button';
   const btnLabel = document.createElement('span');
-  btnLabel.textContent = 'Athena';
+  btnLabel.textContent = 'Rocket';
   badgeEl = document.createElement('span');
   badgeEl.className = 'badge';
   badgeEl.textContent = '0';
@@ -236,7 +236,7 @@ function buildTree(root: ShadowRoot): void {
   const footer = document.createElement('div');
   footer.className = 'footer';
   const link = document.createElement('a');
-  link.textContent = 'Open meeting in Athena \u2192';
+  link.textContent = 'Open meeting in Rocket \u2192';
   link.href = '#';
   link.addEventListener('click', (e) => {
     e.preventDefault();
