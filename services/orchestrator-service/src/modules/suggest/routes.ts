@@ -20,6 +20,8 @@ const Body = z.object({
     .max(20)
     .optional(),
   language: z.string().optional(),
+  /** Active call stage (e.g. 'discovery'). Drives playbook-script grounding. */
+  currentStage: z.string().min(1).max(64).optional(),
 });
 
 interface SuggestDeps {
@@ -59,6 +61,7 @@ export function suggestRoutes(deps: SuggestDeps) {
           intent,
           ...(body.contextTurns ? { contextTurns: body.contextTurns } : {}),
           ...(body.language ? { language: body.language } : {}),
+          ...(body.currentStage ? { currentStage: body.currentStage } : {}),
           minDisplayConfidence: deps.minDisplayConfidence,
           urgencyThreshold: deps.urgencyThreshold,
         },

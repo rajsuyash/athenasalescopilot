@@ -3,6 +3,7 @@ import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import type { LlmClient } from '@athena/sdk-llm';
 import { retrieve, type RetrievedChunk } from '../../lib/retrieval.js';
 import { OBJECTION_CATEGORY_PREFIX, isObjectionIntent } from '../../lib/categories.js';
+import { loadStageBlocksAsChunks } from '../../lib/scripts.js';
 import type { ClassifyOutput } from '../intent/service.js';
 
 export interface SuggestInput {
@@ -11,6 +12,13 @@ export interface SuggestInput {
   intent: ClassifyOutput;
   contextTurns?: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>;
   language?: string;
+  /**
+   * Active call stage (e.g. 'opener', 'discovery', 'demo'). When provided,
+   * the suggest pipeline injects the workspace's published script blocks for
+   * this stage as virtual chunks so the rep's probing/pitching script grounds
+   * the LLM output. Falls back to `intent.stageSignal` when omitted.
+   */
+  currentStage?: string;
   /** Per PRD F5: defaults applied here if caller doesn't override. */
   minDisplayConfidence?: number;
   urgencyThreshold?: number;
@@ -114,7 +122,18 @@ export async function suggest(input: SuggestInput, deps: SuggestDeps): Promise<S
     ...(input.language ? { language: input.language } : {}),
   } as const;
 
-  let chunks: RetrievedChunk[];
+  // Resolve the call stage. Caller may pass an explicit `currentStage` (the
+  // realtime gateway tracks one); otherwise use the intent classifier's
+  // signal. Either way, we ask the script loader for the workspace's
+  // published blocks for that stage.
+  const activeStage = input.currentStage ?? input.intent.stageSignal;
+  const scriptChunks = await loadStageBlocksAsChunks(
+    input.workspaceId,
+    activeStage,
+    input.language,
+  );
+
+  let retrieved: RetrievedChunk[];
   if (isObjectionIntent(input.intent.categories)) {
     const [objectionChunks, openChunks] = await Promise.all([
       retrieve(
@@ -124,14 +143,25 @@ export async function suggest(input: SuggestInput, deps: SuggestDeps): Promise<S
       retrieve({ ...baseQuery, topK: 3 }, { embeddings: deps.embeddings }),
     ]);
     const seen = new Set<string>();
-    chunks = [];
+    retrieved = [];
     for (const c of [...objectionChunks, ...openChunks]) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
-      chunks.push(c);
+      retrieved.push(c);
     }
   } else {
-    chunks = await retrieve({ ...baseQuery, topK: 5 }, { embeddings: deps.embeddings });
+    retrieved = await retrieve({ ...baseQuery, topK: 5 }, { embeddings: deps.embeddings });
+  }
+
+  // Script blocks come first so the LLM weighs them above semantic chunks.
+  // They carry score 0.95 and id prefix `script:` so the source-id allowlist
+  // still validates and the rep can see the script as a cited source.
+  const seenIds = new Set<string>();
+  const chunks: RetrievedChunk[] = [];
+  for (const c of [...scriptChunks, ...retrieved]) {
+    if (seenIds.has(c.id)) continue;
+    seenIds.add(c.id);
+    chunks.push(c);
   }
 
   // PRD F5 AC2: no matching content → ask_next, never fabricate.
