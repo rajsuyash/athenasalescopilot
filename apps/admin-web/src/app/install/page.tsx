@@ -164,8 +164,20 @@ export default function InstallPage() {
                 >
                   Rocket Sales Agent account
                 </Link>{' '}
-                (sign up is free — no card). On first use:
+                (sign up is free — no card).
               </p>
+              <Callout>
+                <strong className="text-white">Signed up with Google?</strong>{' '}
+                You don&apos;t have a password. Use{' '}
+                <Link
+                  href="/connect-extension"
+                  className="text-accent underline underline-offset-2 hover:text-accent/80"
+                >
+                  one-tap pairing code
+                </Link>{' '}
+                instead — generates a 10-minute code you paste into the extension.
+              </Callout>
+              <p className="mt-3">On first use:</p>
               <ul className="mt-3 space-y-1.5 list-disc pl-5 text-white/70">
                 <li>Click <em className="text-white/90">Grant mic permission (one-time)</em></li>
                 <li>
