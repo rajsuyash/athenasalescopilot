@@ -156,6 +156,26 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
+/// Short-lived single-use code that lets a user authenticated on admin-web
+/// (incl. Clerk/Google OAuth) sign into the Chrome extension by pasting a
+/// pairing code. Code is stored as a hash; the raw value is shown to the
+/// user once and never persisted server-side. See services/api/src/modules/
+/// auth/service.ts startExtensionPairing + claimExtensionPairing.
+model ExtensionPairing {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  membershipId String    @map("membership_id") @db.Uuid
+  codeHash     String    @unique @map("code_hash")
+  expiresAt    DateTime  @map("expires_at")
+  claimedAt    DateTime? @map("claimed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("extension_pairings")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Meetings + realtime
 // ─────────────────────────────────────────────────────────────────────────────

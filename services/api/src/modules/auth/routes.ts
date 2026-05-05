@@ -7,7 +7,13 @@ import type { Role } from '@athena/shared-types';
 import { Errors } from '../../lib/errors.js';
 import { seedWorkspaceKnowledge } from '../../lib/seed-workspace.js';
 import type { AccessTokenClaims, RefreshTokenClaims } from '../../lib/types.js';
-import { login, signup } from './service.js';
+import {
+  claimExtensionPairing,
+  isValidPairingCode,
+  login,
+  signup,
+  startExtensionPairing,
+} from './service.js';
 
 const SignupBody = z.object({
   email: z.string().email(),
@@ -29,6 +35,10 @@ const LoginBody = z.object({
 
 const RefreshBody = z.object({
   refreshToken: z.string().min(1),
+});
+
+const PairClaimBody = z.object({
+  code: z.string().min(8).max(32).refine(isValidPairingCode, 'invalid pairing code'),
 });
 
 const REFRESH_TTL_DAYS = 30;
@@ -152,6 +162,49 @@ export function authRoutes(deps: AuthDeps) {
       }
       reply.status(204).send();
     });
+
+    /**
+     * POST /v1/auth/extension/pair-start
+     * Authed user mints a short-lived single-use pairing code for the
+     * Chrome extension. Returns the raw code ONCE.
+     */
+    app.post(
+      '/auth/extension/pair-start',
+      {
+        config: {
+          rateLimit: { max: 10, timeWindow: '1 hour' },
+        },
+      },
+      async (req, reply) => {
+        const claims = await req.requireAuth();
+        const r = await startExtensionPairing({
+          userId: claims.sub,
+          workspaceId: claims.workspaceId,
+        });
+        reply.status(201);
+        return { code: r.code, expiresAt: r.expiresAt.toISOString() };
+      },
+    );
+
+    /**
+     * POST /v1/auth/extension/pair-claim
+     * Chrome extension exchanges a pairing code for an access+refresh token
+     * pair. Issued tokens have identical shape and TTL to a password login.
+     */
+    app.post(
+      '/auth/extension/pair-claim',
+      {
+        config: {
+          rateLimit: { max: 5, timeWindow: '1 minute' },
+        },
+      },
+      async (req) => {
+        const body = PairClaimBody.parse(req.body);
+        const r = await claimExtensionPairing({ code: body.code });
+        const tokens = await issueTokens(r);
+        return { ...tokens, user: { id: r.userId }, workspace: { id: r.workspaceId } };
+      },
+    );
 
     app.get('/auth/me', async (req) => {
       const claims = await req.requireAuth();
