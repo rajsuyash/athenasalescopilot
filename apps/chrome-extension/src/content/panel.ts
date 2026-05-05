@@ -70,77 +70,113 @@ function ensureHost(): ShadowRoot {
 
 function buildTree(root: ShadowRoot): void {
   const style = document.createElement('style');
+  // Tokens shared with the top-stack overlay (see content/index.ts):
+  //   --athena-glass-bg, --athena-glass-blur, --athena-glass-border,
+  //   --athena-text-primary, --athena-text-secondary, --athena-tag-answer.
+  // Kept inline here because the Shadow DOM is isolated from the page styles.
   style.textContent = `
     :host { all: initial; }
     .btn {
       position: fixed; bottom: 24px; right: 24px;
-      background: rgba(15,23,42,0.96); color: #f8fafc;
-      border: 1px solid rgba(148,163,184,0.3);
+      background: rgba(17,24,39,0.42);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      color: #F8FAFC;
+      border: 1px solid rgba(255,255,255,0.14);
       border-radius: 999px; padding: 10px 14px;
-      font: 600 13px -apple-system, system-ui, sans-serif;
-      cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      font: 600 13px Inter, -apple-system, system-ui, sans-serif;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.4);
       display: flex; align-items: center; gap: 8px;
       pointer-events: auto;
+      transition: background 150ms ease, transform 150ms ease;
     }
-    .btn:hover { background: rgba(30,41,59,0.96); }
+    .btn:hover { background: rgba(17,24,39,0.55); }
     .badge {
-      background: #10b981; color: #052e1f;
+      background: #34D399; color: #052e1f;
       border-radius: 999px; font-size: 10px;
       padding: 1px 6px; font-weight: 700;
       min-width: 16px; text-align: center;
+      text-shadow: none;
     }
     .panel {
       position: fixed; top: 0; right: 0; bottom: 0; width: 340px;
-      background: rgba(15,23,42,0.97); color: #f8fafc;
-      border-left: 1px solid rgba(148,163,184,0.18);
-      box-shadow: -8px 0 32px rgba(0,0,0,0.35);
-      transform: translateX(100%); transition: transform 200ms ease-out;
+      background: rgba(17,24,39,0.42);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      color: #F8FAFC;
+      border-left: 1px solid rgba(255,255,255,0.14);
+      box-shadow: -12px 0 40px rgba(0,0,0,0.28), inset 1px 0 0 rgba(255,255,255,0.06);
+      text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+      transform: translateX(100%); transition: transform 240ms cubic-bezier(0.22,1,0.36,1);
       display: flex; flex-direction: column;
-      font: 13px -apple-system, system-ui, sans-serif;
+      font: 13px Inter, -apple-system, system-ui, sans-serif;
       pointer-events: auto;
     }
     .panel.open { transform: translateX(0); }
     .panel header {
-      padding: 12px 14px; border-bottom: 1px solid rgba(148,163,184,0.18);
+      padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.10);
       display: flex; align-items: center; gap: 8px;
     }
-    .panel header h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .panel header h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.2px; }
     .panel header .close {
-      margin-left: auto; cursor: pointer; color: #94a3b8;
-      background: none; border: none; font-size: 18px; padding: 0;
+      margin-left: auto; cursor: pointer; color: rgba(248,250,252,0.78);
+      background: none; border: none; font-size: 18px; padding: 2px 6px;
+      border-radius: 6px; line-height: 1;
+      transition: background 150ms ease;
     }
-    .filters { display: flex; gap: 4px; padding: 8px 12px; flex-wrap: wrap;
-      border-bottom: 1px solid rgba(148,163,184,0.12); }
+    .panel header .close:hover { background: rgba(255,255,255,0.10); }
+    .filters {
+      display: flex; gap: 6px; padding: 10px 14px; flex-wrap: wrap;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
     .chip {
-      background: transparent; color: #94a3b8;
-      border: 1px solid rgba(148,163,184,0.3);
-      border-radius: 999px; padding: 3px 8px;
-      font-size: 11px; cursor: pointer;
+      background: transparent; color: rgba(248,250,252,0.72);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 999px; padding: 3px 10px;
+      font: 600 11px Inter, -apple-system, system-ui, sans-serif;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
     }
-    .chip.active { background: #10b981; color: #052e1f; border-color: #10b981; }
-    .list { flex: 1; overflow-y: auto; padding: 10px 12px;
-      display: flex; flex-direction: column; gap: 8px; }
-    .list .empty { color: #64748b; font-size: 12px; padding: 20px 0; text-align: center; }
+    .chip:hover { background: rgba(255,255,255,0.06); color: #F8FAFC; }
+    .chip.active { background: #34D399; color: #052e1f; border-color: #34D399; text-shadow: none; }
+    .list { flex: 1; overflow-y: auto; padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 10px; }
+    .list .empty { color: rgba(248,250,252,0.55); font-size: 12px; padding: 24px 0; text-align: center; }
     .card {
-      background: rgba(30,41,59,0.5);
-      border: 1px solid rgba(148,163,184,0.15);
-      border-radius: 8px; padding: 10px 12px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px; padding: 12px 14px;
       animation: pulse 600ms ease-out;
     }
     .card .meta {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 10px; color: #10b981; text-transform: uppercase;
-      letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px;
+      display: flex; align-items: center; gap: 8px;
+      font: 600 11px Inter, -apple-system, system-ui, sans-serif;
+      color: #34D399; text-transform: uppercase;
+      letter-spacing: 0.6px; margin-bottom: 6px;
     }
-    .card .meta .ago { color: #64748b; margin-left: auto; font-weight: 400; text-transform: none; }
-    .card .answer { color: #f1f5f9; margin-bottom: 4px; line-height: 1.4; }
-    .card .followup { color: #cbd5e1; font-style: italic; line-height: 1.4; }
-    .footer { padding: 8px 12px; border-top: 1px solid rgba(148,163,184,0.12);
-      font-size: 11px; color: #64748b; text-align: center; }
-    .footer a { color: #10b981; text-decoration: none; }
+    .card .meta .ago {
+      color: rgba(248,250,252,0.55); margin-left: auto;
+      font-weight: 400; text-transform: none; letter-spacing: 0.2px;
+    }
+    .card .answer { color: #F8FAFC; margin-bottom: 4px; line-height: 1.45; font-weight: 500; }
+    .card .followup { color: rgba(248,250,252,0.78); font-style: italic; font-size: 12px; line-height: 1.45; }
+    .footer {
+      padding: 10px 14px; border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px; color: rgba(248,250,252,0.55); text-align: center;
+    }
+    .footer a { color: #34D399; text-decoration: none; font-weight: 600; }
+    .footer a:hover { text-decoration: underline; }
     @keyframes pulse {
-      0% { background: rgba(16,185,129,0.18); }
-      100% { background: rgba(30,41,59,0.5); }
+      0%   { background: rgba(52,211,153,0.20); }
+      100% { background: rgba(255,255,255,0.06); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .panel { transition: none !important; }
+      .card { animation: none !important; }
     }
   `;
   root.appendChild(style);

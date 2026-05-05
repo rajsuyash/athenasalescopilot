@@ -72,25 +72,79 @@ interface OverlaySuggestion {
 }
 
 const OVERLAY_ID = 'athena-overlay-root';
-const MAX_VISIBLE = 3;
-const HIDE_AFTER_MS = 45_000;
+const OVERLAY_STYLE_ID = 'athena-overlay-style';
+// PRD F6: max 2 concurrent suggestions, 15s auto-dismiss.
+const MAX_VISIBLE = 2;
+const HIDE_AFTER_MS = 15_000;
+
+const TYPE_TAG_COLOR: Record<string, string> = {
+  answer: '#34D399',
+  ask_next: '#60A5FA',
+  coach: '#FBBF24',
+  risk: '#F87171',
+};
+
+const TYPE_TAG_LABEL: Record<string, string> = {
+  answer: 'Answer',
+  ask_next: 'Ask next',
+  coach: 'Coach',
+  risk: 'Risk',
+};
+
+function injectOverlayStyles(): void {
+  if (document.getElementById(OVERLAY_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = OVERLAY_STYLE_ID;
+  style.textContent = `
+    @keyframes athena-card-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes athena-card-out {
+      from { opacity: 1; transform: scale(1); }
+      to   { opacity: 0; transform: scale(0.98); }
+    }
+    @keyframes athena-progress {
+      from { transform: scaleX(1); }
+      to   { transform: scaleX(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .athena-card { animation: athena-card-in 1ms linear !important; }
+      .athena-card.athena-exiting { animation: athena-card-out 1ms linear !important; }
+      .athena-progress { animation: none !important; transform: scaleX(0) !important; }
+    }
+  `;
+  document.documentElement.appendChild(style);
+}
 
 function ensureOverlayRoot(): HTMLDivElement {
   let root = document.getElementById(OVERLAY_ID) as HTMLDivElement | null;
   if (root) return root;
+  injectOverlayStyles();
   root = document.createElement('div');
   root.id = OVERLAY_ID;
+  // role=status + aria-live=polite so suggestions are announced without
+  // interrupting active screen-reader speech (PRD F6 a11y).
+  root.setAttribute('role', 'status');
+  root.setAttribute('aria-live', 'polite');
   root.style.cssText = [
     'position:fixed',
-    'bottom:24px',
-    'right:24px',
-    'z-index:2147483647',
+    'top:24px',
+    'left:50%',
+    'transform:translateX(-50%)',
+    'max-height:15vh',
+    'max-width:min(560px,60vw)',
+    'width:max-content',
+    // Recording pill sits at 2147483647; stack lives one layer below so the
+    // privacy pill always wins at the same coordinates.
+    'z-index:2147483646',
     'display:flex',
-    'flex-direction:column',
-    'gap:8px',
-    'max-width:360px',
-    'font-family:-apple-system,system-ui,sans-serif',
+    'flex-direction:column-reverse',
+    'gap:10px',
+    'overflow:hidden',
+    // Container is click-through; only buttons inside cards opt back in.
     'pointer-events:none',
+    'font-family:Inter,-apple-system,system-ui,sans-serif',
   ].join(';');
   document.documentElement.appendChild(root);
   return root;
@@ -98,56 +152,122 @@ function ensureOverlayRoot(): HTMLDivElement {
 
 function renderSuggestion(s: OverlaySuggestion): void {
   const root = ensureOverlayRoot();
-  // Cap the visible stack so we don't pile up cards over a long call.
+  // Container is column-reverse, so the visually-oldest card is the last DOM
+  // child. Drop oldest when we're already at MAX_VISIBLE.
   while (root.children.length >= MAX_VISIBLE) {
-    root.firstElementChild?.remove();
+    root.lastElementChild?.remove();
   }
+
   const card = document.createElement('div');
+  card.className = 'athena-card';
   card.style.cssText = [
-    'background:rgba(15,23,42,0.96)',
-    'color:#f8fafc',
-    'border:1px solid rgba(148,163,184,0.3)',
-    'border-radius:10px',
-    'padding:12px 14px',
-    'box-shadow:0 8px 24px rgba(0,0,0,0.3)',
-    'pointer-events:auto',
-    'font-size:13px',
-    'line-height:1.4',
-    'animation:athena-fade 200ms ease-out',
+    // Frosted glass — 42% slate-900 + 28px blur keeps the speaker readable.
+    'background:rgba(17,24,39,0.42)',
+    'backdrop-filter:blur(28px) saturate(160%)',
+    '-webkit-backdrop-filter:blur(28px) saturate(160%)',
+    'color:#F8FAFC',
+    'border:1px solid rgba(255,255,255,0.14)',
+    'border-radius:16px',
+    'padding:14px 16px',
+    'box-shadow:0 12px 40px rgba(0,0,0,0.28),inset 0 1px 0 rgba(255,255,255,0.08)',
+    'font-size:14px',
+    'line-height:1.45',
+    // Card body is click-through; only buttons opt in to pointer events.
+    'pointer-events:none',
+    'animation:athena-card-in 240ms cubic-bezier(0.22,1,0.36,1)',
+    'position:relative',
+    'overflow:hidden',
+    // Insurance contrast over arbitrary video background.
+    'text-shadow:0 1px 2px rgba(0,0,0,0.4)',
   ].join(';');
 
-  const header = document.createElement('div');
-  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:10px;color:#10b981;font-weight:600;text-transform:uppercase;letter-spacing:0.5px';
+  const typeKey = s.type ?? 'answer';
+  const tagColor = TYPE_TAG_COLOR[typeKey] ?? TYPE_TAG_COLOR.answer;
+  const tagLabel = TYPE_TAG_LABEL[typeKey] ?? 'Suggestion';
+
+  const meta = document.createElement('div');
+  meta.style.cssText =
+    'display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;color:rgba(248,250,252,0.72);font-weight:600;letter-spacing:0.4px';
+
   const tag = document.createElement('span');
-  tag.textContent = s.type === 'ask_next' ? 'Ask next' : s.type === 'risk' ? 'Risk' : 'Suggestion';
-  const close = document.createElement('span');
-  close.textContent = '✕';
-  close.style.cssText = 'cursor:pointer;color:#64748b;font-size:14px';
-  close.addEventListener('click', () => card.remove());
-  header.appendChild(tag);
-  header.appendChild(close);
-  card.appendChild(header);
+  tag.textContent = tagLabel.toUpperCase();
+  tag.style.cssText = `color:${tagColor};text-transform:uppercase;letter-spacing:0.6px`;
+  meta.appendChild(tag);
+
+  if (typeof s.confidenceScore === 'number') {
+    const conf = document.createElement('span');
+    conf.textContent = `· ${s.confidenceScore.toFixed(2)}`;
+    conf.style.cssText = 'opacity:0.65;font-weight:500';
+    meta.appendChild(conf);
+  }
+
+  const spacer = document.createElement('span');
+  spacer.style.cssText = 'flex:1';
+  meta.appendChild(spacer);
+
+  let removed = false;
+  const dismiss = (): void => {
+    if (removed) return;
+    removed = true;
+    card.classList.add('athena-exiting');
+    card.style.animation = 'athena-card-out 200ms cubic-bezier(0.4,0,0.2,1) forwards';
+    setTimeout(() => card.remove(), 220);
+  };
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Dismiss suggestion');
+  close.textContent = '\u2715';
+  close.style.cssText =
+    'pointer-events:auto;cursor:pointer;background:transparent;border:none;color:rgba(248,250,252,0.78);font-size:13px;padding:2px 6px;border-radius:6px;line-height:1;transition:background 150ms ease';
+  close.addEventListener('mouseenter', () => {
+    close.style.background = 'rgba(255,255,255,0.10)';
+  });
+  close.addEventListener('mouseleave', () => {
+    close.style.background = 'transparent';
+  });
+  close.addEventListener('click', dismiss);
+  meta.appendChild(close);
+  card.appendChild(meta);
 
   if (s.answerText) {
     const a = document.createElement('div');
     a.textContent = s.answerText;
-    a.style.cssText = 'color:#f1f5f9;margin-bottom:6px';
+    a.style.cssText = 'color:#F8FAFC;font-weight:500;margin-bottom:6px';
     card.appendChild(a);
   }
   if (s.followupText) {
     const f = document.createElement('div');
-    f.textContent = `→ ${s.followupText}`;
-    f.style.cssText = 'color:#94a3b8;font-style:italic';
+    f.textContent = `\u2192 Ask next: ${s.followupText}`;
+    f.style.cssText =
+      'color:rgba(248,250,252,0.78);font-style:italic;font-size:12px;margin-bottom:4px';
     card.appendChild(f);
   }
   if (s.sources && s.sources.length > 0) {
     const src = document.createElement('div');
-    src.style.cssText = 'margin-top:6px;font-size:10px;color:#64748b';
-    src.textContent = `Source: ${s.sources.map((x) => x.documentName ?? '?').join(', ')}`;
+    src.style.cssText = 'margin-top:6px;font-size:10px;color:rgba(248,250,252,0.55)';
+    src.textContent = `Source · ${s.sources.map((x) => x.documentName ?? '?').join(', ')}`;
     card.appendChild(src);
   }
+
+  // 2px drain bar pinned to bottom edge — visual countdown to auto-dismiss.
+  const progress = document.createElement('div');
+  progress.className = 'athena-progress';
+  progress.style.cssText = [
+    'position:absolute',
+    'left:0',
+    'right:0',
+    'bottom:0',
+    'height:2px',
+    `background:${tagColor}`,
+    'opacity:0.7',
+    'transform-origin:left center',
+    `animation:athena-progress ${HIDE_AFTER_MS}ms linear forwards`,
+  ].join(';');
+  card.appendChild(progress);
+
   root.appendChild(card);
-  setTimeout(() => card.remove(), HIDE_AFTER_MS);
+  setTimeout(dismiss, HIDE_AFTER_MS);
 }
 
 chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion }) => {
@@ -183,23 +303,29 @@ function ensurePillRoot(): void {
   pill.id = PILL_ID;
   pill.style.cssText = [
     'position:fixed',
-    'top:12px',
-    'right:12px',
+    'top:24px',
+    'right:24px',
     'z-index:2147483647',
-    'background:rgba(220,38,38,0.95)',
-    'color:#fff',
-    'padding:6px 10px',
+    // Same frosted glass as suggestion cards; red dot carries the signal.
+    'background:rgba(17,24,39,0.42)',
+    'backdrop-filter:blur(28px) saturate(160%)',
+    '-webkit-backdrop-filter:blur(28px) saturate(160%)',
+    'color:#F8FAFC',
+    'border:1px solid rgba(255,255,255,0.14)',
+    'padding:6px 12px 6px 10px',
     'border-radius:999px',
-    'font:600 11px -apple-system,system-ui,sans-serif',
-    'letter-spacing:0.3px',
-    'box-shadow:0 2px 8px rgba(0,0,0,0.3)',
+    'font:600 11px Inter,-apple-system,system-ui,sans-serif',
+    'letter-spacing:0.4px',
+    'box-shadow:0 12px 40px rgba(0,0,0,0.28),inset 0 1px 0 rgba(255,255,255,0.08)',
+    'text-shadow:0 1px 2px rgba(0,0,0,0.4)',
     'pointer-events:none',
     'display:flex',
     'align-items:center',
-    'gap:6px',
+    'gap:8px',
   ].join(';');
   const dot = document.createElement('span');
-  dot.style.cssText = 'width:8px;height:8px;border-radius:999px;background:#fff;animation:athena-pulse 1.5s infinite';
+  dot.style.cssText =
+    'width:8px;height:8px;border-radius:999px;background:#F87171;box-shadow:0 0 8px rgba(248,113,113,0.7);animation:athena-pulse 1.5s infinite';
   pill.appendChild(dot);
   pill.appendChild(document.createTextNode('Athena recording'));
   document.documentElement.appendChild(pill);

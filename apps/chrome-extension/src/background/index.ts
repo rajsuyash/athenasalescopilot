@@ -480,6 +480,21 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       // service worker. Cheap; no-op when buffers are empty.
       void flushBuffers();
     })();
+    return;
+  }
+  if (alarm.name === SILENCE_ALARM) {
+    void (async () => {
+      const state = await readState();
+      if (!state.capture || state.capture.closed) {
+        await stopSilenceWatchdog();
+        return;
+      }
+      const lastFinal = await readLastFinalAt();
+      if (!lastFinal) return;
+      if (Date.now() - lastFinal >= SILENCE_TIMEOUT_MS) {
+        await stopCapture('silence_30s');
+      }
+    })();
   }
 });
 
@@ -651,6 +666,7 @@ async function startCapture(): Promise<{ ok: boolean; error?: string }> {
     reconnectAttempt: null,
   };
   await writeState({ capture: initial });
+  await startSilenceWatchdog();
 
   await chrome.runtime.sendMessage({
     type: 'offscreen.start',
@@ -663,7 +679,47 @@ async function startCapture(): Promise<{ ok: boolean; error?: string }> {
   return { ok: true };
 }
 
+// Auto-stop captures that go silent. We treat "silent" as no Deepgram
+// `transcript.final` for SILENCE_TIMEOUT_MS — audio frames may still ship from
+// a muted call, so we can't trust `shipped`. The watchdog alarm is a backstop
+// in case offscreen.update goes quiet too.
+const SILENCE_ALARM = 'athena-silence-watchdog';
+const SILENCE_TIMEOUT_MS = 30_000;
+const SILENCE_LAST_FINAL_KEY = 'silence.lastFinalAt';
+
+async function noteFinalHeard(): Promise<void> {
+  await chrome.storage.local.set({ [SILENCE_LAST_FINAL_KEY]: Date.now() });
+}
+
+async function readLastFinalAt(): Promise<number> {
+  const r = await chrome.storage.local.get(SILENCE_LAST_FINAL_KEY);
+  const v = r[SILENCE_LAST_FINAL_KEY];
+  return typeof v === 'number' ? v : 0;
+}
+
+async function startSilenceWatchdog(): Promise<void> {
+  // Seed so a brand-new capture gets the full grace window before triggering.
+  await noteFinalHeard();
+  // 30s period is the MV3 floor; combined with the inline check on each
+  // offscreen.update this gives sub-second detection during normal traffic
+  // and 30-60s worst-case detection if updates also stop arriving.
+  await chrome.alarms.create(SILENCE_ALARM, {
+    periodInMinutes: 0.5,
+    when: Date.now() + SILENCE_TIMEOUT_MS,
+  });
+}
+
+async function stopSilenceWatchdog(): Promise<void> {
+  try {
+    await chrome.alarms.clear(SILENCE_ALARM);
+  } catch {
+    /* clear is best-effort */
+  }
+  await chrome.storage.local.remove(SILENCE_LAST_FINAL_KEY);
+}
+
 async function stopCapture(reason: string): Promise<{ ok: boolean }> {
+  await stopSilenceWatchdog();
   if (await hasOffscreen()) {
     try {
       await chrome.runtime.sendMessage({ type: 'offscreen.stop' });
@@ -703,6 +759,7 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
   void (async () => {
     const state = await readState();
     if (!state.capture) return;
+    const prevFinals = state.capture.finalsHeard ?? 0;
     const next: CaptureStatus = {
       ...state.capture,
       shipped: msg.shipped ?? state.capture.shipped,
@@ -714,7 +771,21 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
       reconnectAttempt: msg.reconnectAttempt !== undefined ? msg.reconnectAttempt : state.capture.reconnectAttempt,
     };
     await writeState({ capture: next });
-    if (next.closed) await tearDownOffscreen();
+    if (next.closed) {
+      await tearDownOffscreen();
+      return;
+    }
+    // Reset the silence timer whenever Deepgram finalizes a new utterance.
+    if (typeof msg.finalsHeard === 'number' && msg.finalsHeard > prevFinals) {
+      await noteFinalHeard();
+      return;
+    }
+    // Inline backstop: if updates keep arriving but no new finals for >=30s,
+    // stop now without waiting for the alarm.
+    const lastFinal = await readLastFinalAt();
+    if (lastFinal && Date.now() - lastFinal >= SILENCE_TIMEOUT_MS) {
+      await stopCapture('silence_30s');
+    }
   })();
 });
 
