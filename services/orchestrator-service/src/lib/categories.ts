@@ -19,6 +19,35 @@ export const INTENT_CATEGORIES = [
 
 export type IntentCategory = (typeof INTENT_CATEGORIES)[number];
 
+/**
+ * Intent categories that signal "objection territory" — when ANY of these
+ * appear in the classifier output, the suggest pipeline runs an extra
+ * retrieval pass restricted to the seeded objection-handling framework so the
+ * Andres Socratic-reframe library is guaranteed to surface, not just hoped-for
+ * via semantic ranking.
+ */
+export const OBJECTION_INTENT_CATEGORIES = [
+  'objection',
+  'pricing',
+  'authority',
+  'budget',
+  'timeline',
+  'competitor',
+] as const satisfies readonly IntentCategory[];
+
+/**
+ * Document-side category prefix that matches every chunk seeded by
+ * `services/api/src/lib/seed-workspace.ts` (objection-handling-framework,
+ * -library, -tonality, -source).
+ */
+export const OBJECTION_CATEGORY_PREFIX = 'objection-handling-' as const;
+
+export function isObjectionIntent(categories: readonly string[]): boolean {
+  return categories.some((c) =>
+    (OBJECTION_INTENT_CATEGORIES as readonly string[]).includes(c),
+  );
+}
+
 export const STAGE_SIGNALS = [
   'opener',
   'qualification',

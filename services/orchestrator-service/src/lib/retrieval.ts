@@ -41,6 +41,12 @@ export interface RetrieveOpts {
   topK?: number;
   minScore?: number;
   category?: string;
+  /**
+   * Restrict to documents whose category starts with this string. Useful for
+   * matching the four seeded objection-handling-* categories with one filter.
+   * Mutually exclusive with `category`; when both set, `category` wins.
+   */
+  categoryPrefix?: string;
   language?: string;
 }
 
@@ -96,6 +102,7 @@ export async function retrieve(
     JOIN knowledge_documents kd ON kd.id = kdv.document_id
     WHERE kc.workspace_id = $2::uuid
       AND ($6::text IS NULL OR kd.category = $6)
+      AND ($7::text IS NULL OR kd.category LIKE $7 || '%')
     ORDER BY a.score DESC
     LIMIT $4
     `,
@@ -105,6 +112,7 @@ export async function retrieve(
     topK,
     opts.query,
     opts.category ?? null,
+    opts.category ? null : (opts.categoryPrefix ?? null),
   );
 
   return rows

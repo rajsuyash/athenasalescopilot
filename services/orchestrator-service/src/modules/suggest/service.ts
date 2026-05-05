@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import type { LlmClient } from '@athena/sdk-llm';
 import { retrieve, type RetrievedChunk } from '../../lib/retrieval.js';
+import { OBJECTION_CATEGORY_PREFIX, isObjectionIntent } from '../../lib/categories.js';
 import type { ClassifyOutput } from '../intent/service.js';
 
 export interface SuggestInput {
@@ -100,21 +101,38 @@ export async function suggest(input: SuggestInput, deps: SuggestDeps): Promise<S
   // suggestions at the default 0.2 in dev.
   const minScoreEnv = process.env.RETRIEVAL_MIN_SCORE;
   const minScore = minScoreEnv !== undefined ? Number(minScoreEnv) : 0.1;
-  // No category filter: intent categories (e.g. "objection", "budget") rarely
-  // match the document categories the workspace uses (e.g.
-  // "objection-handling-library", "faq"), and a strict filter would hide the
-  // pretrained framework chunks. Semantic + trigram matching already prioritises
-  // the right docs.
-  const chunks = await retrieve(
-    {
-      workspaceId: input.workspaceId,
-      query: input.customerText,
-      topK: 5,
-      minScore: Number.isFinite(minScore) ? minScore : 0.1,
-      ...(input.language ? { language: input.language } : {}),
-    },
-    { embeddings: deps.embeddings },
-  );
+  // Two-pass retrieval when the intent classifier flags an objection: one pass
+  // restricted to the seeded `objection-handling-*` framework, one unfiltered.
+  // Merge objection-first so the Andres Socratic-reframe library is guaranteed
+  // to surface even when its semantic score loses to a closer FAQ match.
+  // Falls through to single-pass when the workspace isn't seeded.
+  const safeMinScore = Number.isFinite(minScore) ? minScore : 0.1;
+  const baseQuery = {
+    workspaceId: input.workspaceId,
+    query: input.customerText,
+    minScore: safeMinScore,
+    ...(input.language ? { language: input.language } : {}),
+  } as const;
+
+  let chunks: RetrievedChunk[];
+  if (isObjectionIntent(input.intent.categories)) {
+    const [objectionChunks, openChunks] = await Promise.all([
+      retrieve(
+        { ...baseQuery, topK: 3, categoryPrefix: OBJECTION_CATEGORY_PREFIX },
+        { embeddings: deps.embeddings },
+      ),
+      retrieve({ ...baseQuery, topK: 3 }, { embeddings: deps.embeddings }),
+    ]);
+    const seen = new Set<string>();
+    chunks = [];
+    for (const c of [...objectionChunks, ...openChunks]) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      chunks.push(c);
+    }
+  } else {
+    chunks = await retrieve({ ...baseQuery, topK: 5 }, { embeddings: deps.embeddings });
+  }
 
   // PRD F5 AC2: no matching content → ask_next, never fabricate.
   if (chunks.length === 0) {

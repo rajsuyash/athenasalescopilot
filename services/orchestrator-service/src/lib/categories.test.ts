@@ -1,6 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import { classifyHeuristic } from './categories.js';
+import {
+  OBJECTION_CATEGORY_PREFIX,
+  classifyHeuristic,
+  isObjectionIntent,
+} from './categories.js';
 
 describe('classifyHeuristic', () => {
   it('returns none + low urgency for filler', () => {
@@ -36,5 +40,26 @@ describe('classifyHeuristic', () => {
   it('urgency is 0..1', () => {
     const r = classifyHeuristic("Pricing? Security? GDPR? When can we go-live? What's the cost?");
     assert.ok(r.urgencyScore >= 0 && r.urgencyScore <= 1);
+  });
+});
+
+describe('isObjectionIntent', () => {
+  it('flags explicit objection intent', () => {
+    assert.equal(isObjectionIntent(['objection']), true);
+  });
+
+  it('flags pricing/authority/budget/timeline/competitor as objection-adjacent', () => {
+    for (const c of ['pricing', 'authority', 'budget', 'timeline', 'competitor']) {
+      assert.equal(isObjectionIntent([c]), true, `expected ${c} to be objection-adjacent`);
+    }
+  });
+
+  it('does not flag neutral intents', () => {
+    assert.equal(isObjectionIntent(['none']), false);
+    assert.equal(isObjectionIntent(['integration', 'product_fit']), false);
+  });
+
+  it('exposes the seed-document category prefix', () => {
+    assert.equal(OBJECTION_CATEGORY_PREFIX, 'objection-handling-');
   });
 });
