@@ -39,7 +39,13 @@ export default async function DashboardPage() {
   try {
     me = await callBackend<MeResponse>({ baseUrl: env.apiUrl, path: '/v1/auth/me' });
   } catch (err) {
-    if (err instanceof ApiError && err.status === 401) redirect('/signin');
+    // Don't redirect on 401 here — Clerk says we're signed in, so /signin
+    // would just bounce us back via Clerk's session check (infinite loop).
+    // Instead show a provisioning page that auto-retries; the api auth
+    // plugin self-heals the User+Workspace+Membership on next request.
+    if (err instanceof ApiError && err.status === 401) {
+      return <ProvisioningPage />;
+    }
     throw err;
   }
 
@@ -133,5 +139,48 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-xs text-white/40 mb-1">{label}</div>
       <div className="text-2xl font-medium">{value}</div>
     </div>
+  );
+}
+
+/**
+ * Shown when /v1/auth/me 401s on a freshly-signed-up user. The api auth
+ * plugin provisions the User+Workspace+Membership inline on the next
+ * request, so the meta-refresh below typically lands on a working
+ * dashboard within a second or two.
+ */
+function ProvisioningPage() {
+  return (
+    <html lang="en">
+      <head>
+        <meta httpEquiv="refresh" content="2;url=/dashboard" />
+        <title>Provisioning your workspace…</title>
+      </head>
+      <body className="min-h-screen flex items-center justify-center bg-ink-950 text-white px-6 font-sans">
+        <div className="text-center max-w-md">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-accent backdrop-blur">
+            <span className="relative inline-flex w-1.5 h-1.5">
+              <span className="absolute inset-0 rounded-full bg-accent animate-ping" />
+              <span className="relative rounded-full bg-accent w-1.5 h-1.5" />
+            </span>
+            Provisioning
+          </div>
+          <h1 className="mt-5 text-3xl font-semibold tracking-tight">
+            Setting up your workspace…
+          </h1>
+          <p className="mt-3 text-white/60 leading-relaxed">
+            We&apos;re creating your account in our backend. This typically
+            takes a couple of seconds and only happens once. The page will
+            auto-refresh.
+          </p>
+          <p className="mt-6 text-xs text-white/40">
+            Stuck for more than 30 seconds? Email{' '}
+            <a className="text-accent underline" href="mailto:rajsuyash@gmail.com">
+              rajsuyash@gmail.com
+            </a>
+            .
+          </p>
+        </div>
+      </body>
+    </html>
   );
 }
