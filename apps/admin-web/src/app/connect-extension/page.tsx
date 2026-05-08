@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useAuth } from '@clerk/nextjs';
 import { Shell } from '@/components/Shell';
 
 interface PairStartResponse {
@@ -17,6 +18,7 @@ interface PairError {
 type Phase = 'idle' | 'minting' | 'ready' | 'expired' | 'error';
 
 export default function ConnectExtensionPage() {
+  const { isLoaded, isSignedIn } = useAuth();
   const [phase, setPhase] = useState<Phase>('idle');
   const [code, setCode] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
@@ -86,10 +88,38 @@ export default function ConnectExtensionPage() {
         </h1>
         <p className="mt-4 text-base text-white/60 leading-relaxed max-w-xl">
           Signed in with Google? Mint a one-time pairing code below and paste it
-          into the Athena extension popup. Works for every account type — no
+          into the Rocket extension popup. Works for every account type, no
           extra password to remember.
         </p>
 
+        {!isLoaded ? (
+          <div className="mt-10 rounded-2xl border border-white/10 bg-ink-900/40 p-8 text-center text-sm text-white/60">
+            Loading…
+          </div>
+        ) : !isSignedIn ? (
+          <div className="mt-10 rounded-2xl border border-white/10 bg-ink-900/40 p-8 text-center space-y-4">
+            <p className="text-white/70">
+              Sign in to your Rocket workspace to mint a pairing code.
+            </p>
+            <Link
+              href="/signin?redirect_url=/connect-extension"
+              className="inline-flex rounded-xl bg-accent text-ink-900 font-semibold px-5 py-2.5 shadow-glow-mint hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200"
+            >
+              Sign in to continue
+            </Link>
+            <p className="text-xs text-white/40">
+              No Rocket account?{' '}
+              <Link
+                href="/signin?mode=signup&redirect_url=/connect-extension"
+                className="text-accent underline underline-offset-2 hover:text-accent/80"
+              >
+                Create one (free, no card)
+              </Link>
+              .
+            </p>
+          </div>
+        ) : (
+        <>
         {phase === 'idle' || phase === 'error' ? (
           <div className="mt-10 rounded-2xl border border-white/10 bg-ink-900/40 p-8 text-center">
             <button
@@ -167,6 +197,8 @@ export default function ConnectExtensionPage() {
             </button>
           </div>
         ) : null}
+        </>
+        )}
 
         <div className="mt-12 text-sm text-white/50">
           Don&apos;t have the extension yet?{' '}
