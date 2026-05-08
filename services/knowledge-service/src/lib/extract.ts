@@ -2,6 +2,7 @@
  * Plain-text extraction from supported upload formats. Keep this file
  * dependency-light; PDF parsing only loaded on demand.
  */
+import { safeFetch, SsrfBlocked } from './ssrf-guard.js';
 
 export type SupportedFormat = 'text' | 'markdown' | 'pdf' | 'csv' | 'docx' | 'url';
 
@@ -49,10 +50,25 @@ export async function extractText(input: ExtractInput): Promise<ExtractResult> {
       throw Object.assign(new Error('docx ingestion not yet implemented'), { statusCode: 415 });
     case 'url': {
       if (!input.url) throw new Error('url requires url');
-      const res = await fetch(input.url, { redirect: 'follow' });
-      if (!res.ok) throw Object.assign(new Error(`URL_FETCH_${res.status}`), { statusCode: 422 });
-      const text = await res.text();
-      return { text, format: 'url' };
+      try {
+        const r = await safeFetch(input.url, {
+          maxBytes: MAX_BYTES,
+          timeoutMs: 10_000,
+        });
+        if (r.status < 200 || r.status >= 300) {
+          throw Object.assign(new Error(`URL_FETCH_${r.status}`), { statusCode: 422 });
+        }
+        return { text: r.text, format: 'url' };
+      } catch (err) {
+        // SSRF guard rejection — surface as 422 (don't leak internal-IP hints).
+        if (err instanceof SsrfBlocked) {
+          throw Object.assign(new Error('URL_BLOCKED'), {
+            statusCode: 422,
+            code: 'URL_BLOCKED',
+          });
+        }
+        throw err;
+      }
     }
   }
 }

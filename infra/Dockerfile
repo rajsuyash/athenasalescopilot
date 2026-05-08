@@ -42,9 +42,17 @@ RUN apt-get update \
 
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
 
+# Non-root user. Container escape + RCE blast radius is reduced because no
+# Athena service needs root at runtime — pnpm + node bind only the service
+# port (4000-4070) which is well above the privileged-port range.
+RUN addgroup --system --gid 1001 athena \
+    && adduser --system --uid 1001 --ingroup athena --home /app --no-create-home athena
+
 ENV NODE_ENV=production
 
-COPY --from=build /app /app
+COPY --from=build --chown=athena:athena /app /app
+
+USER athena
 
 # Default to api; override via the platform's CMD/process group.
 EXPOSE 4000

@@ -101,6 +101,11 @@ desktop.ini
 .claude/local/
 .claude/settings.local.json
 
+# gstack working dir — security reports, telemetry, learnings, checkpoints.
+# /cso writes findings (with file:line vuln locations + exploit scenarios) here;
+# committing them publishes a roadmap of unpatched issues to anyone reading the repo.
+.gstack/
+
 # Database / docker volumes
 data/
 pgdata/
