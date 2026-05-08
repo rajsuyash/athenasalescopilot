@@ -4,7 +4,7 @@ import fp from 'fastify-plugin';
 import type { Permission } from '@athena/policies';
 import { can, minimumRoleFor } from '@athena/policies';
 import { prisma } from '@athena/db';
-import { Errors } from '../lib/errors.js';
+import { ApiError, Errors } from '../lib/errors.js';
 import type { AccessTokenClaims } from '../lib/types.js';
 import { verifyClerkToken, clerkClient } from '../lib/clerk.js';
 
@@ -59,9 +59,25 @@ export const authPlugin = fp<AuthOpts>(async (app: FastifyInstance, opts) => {
       this.auth = claims;
       return claims;
     } catch (err) {
-      if ((err as { code?: string }).code === 'FAST_JWT_EXPIRED') throw Errors.tokenExpired();
-      if (err instanceof Error && err.message.includes('MISSING_WORKSPACE_CLAIM')) throw err;
-      throw Errors.tokenInvalid();
+      // ApiError raised by us above (e.g. MISSING_WORKSPACE_CLAIM) — pass through.
+      if (err instanceof ApiError) throw err;
+      const jwtCode = (err as { code?: string }).code;
+      if (jwtCode === 'FAST_JWT_EXPIRED') throw Errors.tokenExpired();
+      // Surface the underlying JWT verification reason in details so reps
+      // can see "FAST_JWT_INVALID_SIGNATURE" / "FAST_JWT_MALFORMED" /
+      // "FAST_JWT_MISSING_SIGNATURE" / etc. instead of an opaque
+      // "Token is invalid". Logged server-side at warn for support.
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.warn(
+        { jwtCode, jwtMessage: message, hasBearer: !!bearer },
+        'jwt verify failed',
+      );
+      throw new ApiError(
+        401,
+        'TOKEN_INVALID',
+        'Token is invalid.',
+        jwtCode ? { jwtCode, hint: message } : { hint: message },
+      );
     }
   });
 

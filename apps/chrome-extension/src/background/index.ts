@@ -158,20 +158,30 @@ async function ensureApiMeeting(active: ActiveMeeting): Promise<EnsureApiMeeting
       return { ok: false, status: r.status, code: 'CONFLICT_NOT_RESOLVABLE' };
     }
     // Surface the server-side reason so reps + support know what's wrong
-    // (PAYMENT_OVERDUE, METERING_LIMIT, FORBIDDEN, etc).
+    // (PAYMENT_OVERDUE, METERING_LIMIT, FORBIDDEN, JWT-verify-fail, etc).
     const body = (await r.json().catch(() => ({}))) as
-      | { error?: string; code?: string; message?: string }
+      | {
+          error?: string;
+          code?: string;
+          message?: string;
+          details?: { jwtCode?: string; hint?: string } | undefined;
+        }
       | undefined;
     log.warn('[rocket-bg] ensureApiMeeting failed', {
       status: r.status,
       code: body?.code ?? body?.error,
       message: body?.message,
+      details: body?.details,
     });
+    // If the api gave us a jwtCode (e.g. FAST_JWT_INVALID_SIGNATURE,
+    // FAST_JWT_MALFORMED), append it so the rep's error message points at
+    // the real cause instead of just "Token is invalid".
+    const jwtHint = body?.details?.jwtCode ? ` [${body.details.jwtCode}]` : '';
     return {
       ok: false,
       status: r.status,
       code: body?.code ?? body?.error ?? `HTTP_${r.status}`,
-      message: body?.message ?? `HTTP ${r.status}`,
+      message: (body?.message ?? `HTTP ${r.status}`) + jwtHint,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'network error';
