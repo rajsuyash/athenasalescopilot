@@ -118,12 +118,21 @@ async function setActive(active: ActiveMeeting | null): Promise<void> {
   // Without this, every new Meet requires the user to either open the macOS
   // overlay or manually POST a meeting — neither of which is acceptable for
   // a chrome-only flow.
-  if (active) void ensureApiMeeting(active);
+  if (active) void ensureApiMeeting(active).catch(() => undefined);
 }
 
-async function ensureApiMeeting(active: ActiveMeeting): Promise<void> {
+interface EnsureApiMeetingResult {
+  ok: boolean;
+  status?: number;
+  code?: string;
+  message?: string;
+}
+
+async function ensureApiMeeting(active: ActiveMeeting): Promise<EnsureApiMeetingResult> {
   const settings = await getSettings();
-  if (!settings.accessToken) return;
+  if (!settings.accessToken) {
+    return { ok: false, code: 'NOT_SIGNED_IN', message: 'sign in first' };
+  }
   try {
     const r = await signedFetch(`${settings.apiUrl}/v1/meetings`, {
       method: 'POST',
@@ -135,14 +144,39 @@ async function ensureApiMeeting(active: ActiveMeeting): Promise<void> {
     });
     if (r.ok) {
       const body = (await r.json().catch(() => ({}))) as { id?: string };
-      if (body.id) await stashInternalMeetingId(active.meetingId, body.id);
-    } else if (r.status === 409 || r.status === 400) {
+      if (body.id) {
+        await stashInternalMeetingId(active.meetingId, body.id);
+        return { ok: true, status: r.status };
+      }
+      return { ok: false, status: r.status, code: 'NO_ID_IN_RESPONSE' };
+    }
+    if (r.status === 409 || r.status === 400) {
       // Likely a duplicate-live conflict. Look up the existing live meeting
       // so capture.start can still resolve an internal UUID.
-      void resolveInternalMeetingId(active.meetingId);
+      const id = await resolveInternalMeetingId(active.meetingId);
+      if (id) return { ok: true, status: r.status };
+      return { ok: false, status: r.status, code: 'CONFLICT_NOT_RESOLVABLE' };
     }
-  } catch {
-    // best-effort
+    // Surface the server-side reason so reps + support know what's wrong
+    // (PAYMENT_OVERDUE, METERING_LIMIT, FORBIDDEN, etc).
+    const body = (await r.json().catch(() => ({}))) as
+      | { error?: string; code?: string; message?: string }
+      | undefined;
+    log.warn('[rocket-bg] ensureApiMeeting failed', {
+      status: r.status,
+      code: body?.code ?? body?.error,
+      message: body?.message,
+    });
+    return {
+      ok: false,
+      status: r.status,
+      code: body?.code ?? body?.error ?? `HTTP_${r.status}`,
+      message: body?.message ?? `HTTP ${r.status}`,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'network error';
+    log.warn('[rocket-bg] ensureApiMeeting threw', { message });
+    return { ok: false, code: 'NETWORK_ERROR', message };
   }
 }
 
@@ -620,15 +654,23 @@ async function startCapture(): Promise<{ ok: boolean; error?: string }> {
 
   // Need the internal UUID — gateway hello frame requires it.
   let internalId = active.internalMeetingId;
+  let lastEnsure: EnsureApiMeetingResult | null = null;
   if (!internalId) internalId = await resolveInternalMeetingId(active.meetingId);
   if (!internalId) {
     // Last resort: try creating now (covers fresh-tab cases where meet.detected
     // fired before the user signed in).
-    await ensureApiMeeting(active);
+    lastEnsure = await ensureApiMeeting(active);
     const refreshed = await getActive();
     internalId = refreshed?.internalMeetingId ?? null;
   }
-  if (!internalId) return { ok: false, error: 'could not resolve meeting' };
+  if (!internalId) {
+    // Surface the actual server-side reason so reps see PAYMENT_OVERDUE,
+    // METERING_LIMIT, FORBIDDEN, etc. instead of a flat "could not resolve".
+    const detail = lastEnsure
+      ? lastEnsure.message ?? lastEnsure.code ?? `HTTP ${lastEnsure.status ?? '?'}`
+      : 'no live meeting found';
+    return { ok: false, error: `could not start meeting: ${detail}` };
+  }
 
   // Pre-refresh access token — the offscreen doc opens a long-lived WS and
   // can't transparently refresh on a 401 mid-capture.
