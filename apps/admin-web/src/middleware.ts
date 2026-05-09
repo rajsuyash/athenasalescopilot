@@ -18,6 +18,10 @@ const isPublic = createRouteMatcher([
   '/install',
   '/connect-extension',
   '/extension-auth(.*)',
+  // Health probes — Railway / load balancers / uptime checks must hit these
+  // without a Clerk session. Otherwise auth.protect() rewrites to Clerk's
+  // handshake path and Railway sees 404 on every probe.
+  '/api/healthz',
 ]);
 
 export default clerkMiddleware(async (auth, req) => {
