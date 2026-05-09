@@ -106,6 +106,12 @@ desktop.ini
 # committing them publishes a roadmap of unpatched issues to anyone reading the repo.
 .gstack/
 
+# /uat-runner artifacts: plans, reports, raw subagent outputs, screenshots.
+# Same reasoning as .gstack/ — UAT reports include exploit-adjacent findings
+# and per-case repro steps. Keep local.
+.claude/uat/
+**/.uat-tmp/
+
 # Database / docker volumes
 data/
 pgdata/
