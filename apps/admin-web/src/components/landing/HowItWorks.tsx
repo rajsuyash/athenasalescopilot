@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import { SectionHeader } from './BentoGrid';
+import { useFadeUp } from './motion-utils';
 
 /**
  * Three-step "how it works" with a connecting timeline. Steps fade in and
@@ -49,6 +50,7 @@ const STEPS = [
 ];
 
 export function HowItWorks() {
+  const fadeUp = useFadeUp();
   return (
     <section id="how" className="px-6 py-24 max-w-6xl mx-auto">
       <SectionHeader
@@ -71,10 +73,7 @@ export function HowItWorks() {
           {STEPS.map((s, i) => (
             <motion.div
               key={s.n}
-              initial={{ opacity: 0, y: 24 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: '-80px' }}
-              transition={{ duration: 0.6, delay: i * 0.12, ease: [0.16, 1, 0.3, 1] }}
+              {...fadeUp({ y: 24, delay: i * 0.12 })}
               className="relative"
             >
               <div className="relative aurora-border rounded-2xl">

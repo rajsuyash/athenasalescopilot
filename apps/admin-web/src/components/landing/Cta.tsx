@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { motion } from 'framer-motion';
+import { useFadeUp } from './motion-utils';
 
 /**
  * Final-conversion section. Big headline, single CTA, ambient glow halo.
@@ -9,16 +10,14 @@ import { motion } from 'framer-motion';
  * by this point, just close the tab.
  */
 export function Cta() {
+  const fadeUp = useFadeUp();
   return (
     <section className="px-6 py-32 max-w-4xl mx-auto text-center relative">
       {/* Ambient glow halo */}
       <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 mx-auto w-[80%] h-72 rounded-full blur-3xl bg-gradient-to-r from-accent/25 via-electric-500/15 to-violet-500/25 -z-10" />
 
       <motion.h2
-        initial={{ opacity: 0, y: 16 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: '-80px' }}
-        transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
+        {...fadeUp({ y: 16, duration: 0.7 })}
         className="text-4xl md:text-6xl font-semibold tracking-tight leading-[1.05]"
       >
         Your next call deserves a coach.
@@ -27,10 +26,7 @@ export function Cta() {
       </motion.h2>
 
       <motion.p
-        initial={{ opacity: 0, y: 12 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: '-80px' }}
-        transition={{ duration: 0.6, delay: 0.1 }}
+        {...fadeUp({ y: 12, delay: 0.1 })}
         className="mt-5 text-base md:text-lg text-white/60"
       >
         Spin up a workspace in 30 seconds. Upload your playbook. Coach yourself
@@ -38,10 +34,7 @@ export function Cta() {
       </motion.p>
 
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: '-80px' }}
-        transition={{ duration: 0.6, delay: 0.2 }}
+        {...fadeUp({ y: 12, delay: 0.2 })}
         className="mt-10 flex items-center justify-center gap-3 flex-wrap"
       >
         <Link

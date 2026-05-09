@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { SectionHeader } from './BentoGrid';
+import { useFadeUp } from './motion-utils';
 
 const TIERS = [
   {
@@ -39,6 +40,7 @@ const TIERS = [
 ];
 
 export function Pricing() {
+  const fadeUp = useFadeUp();
   return (
     <section id="pricing" className="px-6 py-24 max-w-6xl mx-auto">
       <SectionHeader
@@ -51,10 +53,7 @@ export function Pricing() {
         {TIERS.map((t, i) => (
           <motion.div
             key={t.tier}
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-80px' }}
-            transition={{ duration: 0.6, delay: i * 0.08, ease: [0.16, 1, 0.3, 1] }}
+            {...fadeUp({ y: 24, delay: i * 0.08 })}
             whileHover={{ y: -4 }}
             className={`relative rounded-2xl ${t.highlighted ? 'aurora-border' : ''}`}
           >

@@ -1,6 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import { useFadeUp } from './motion-utils';
 
 /**
  * Apple-style bento grid for product features. 6 cards across a 6-col
@@ -54,6 +55,7 @@ const CARDS: Array<{
 ];
 
 export function BentoGrid() {
+  const fadeUp = useFadeUp();
   return (
     <section id="features" className="px-6 py-24 max-w-6xl mx-auto">
       <SectionHeader
@@ -65,14 +67,7 @@ export function BentoGrid() {
         {CARDS.map((c, i) => (
           <motion.div
             key={c.title}
-            initial={{ opacity: 0, y: 24 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-80px' }}
-            transition={{
-              duration: 0.6,
-              ease: [0.16, 1, 0.3, 1],
-              delay: i * 0.06,
-            }}
+            {...fadeUp({ y: 24, delay: i * 0.06 })}
             className={`aurora-border rounded-2xl ${c.span}`}
           >
             <div className="relative h-full glass rounded-2xl p-6 flex flex-col gap-4 overflow-hidden group">
@@ -102,31 +97,23 @@ export function SectionHeader({
   title: string;
   subtitle: string;
 }) {
+  const fadeUp = useFadeUp();
   return (
     <div className="max-w-3xl">
       <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: '-60px' }}
-        transition={{ duration: 0.5 }}
+        {...fadeUp({ y: 12, duration: 0.5 })}
         className="text-xs uppercase tracking-[0.22em] text-accent"
       >
         {eyebrow}
       </motion.div>
       <motion.h2
-        initial={{ opacity: 0, y: 12 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: '-60px' }}
-        transition={{ duration: 0.6, delay: 0.06 }}
+        {...fadeUp({ y: 12, delay: 0.06 })}
         className="mt-3 text-3xl md:text-5xl font-semibold tracking-tight leading-[1.05]"
       >
         {title}
       </motion.h2>
       <motion.p
-        initial={{ opacity: 0, y: 12 }}
-        whileInView={{ opacity: 1, y: 0 }}
-        viewport={{ once: true, margin: '-60px' }}
-        transition={{ duration: 0.6, delay: 0.12 }}
+        {...fadeUp({ y: 12, delay: 0.12 })}
         className="mt-4 text-base md:text-lg text-white/60 leading-relaxed"
       >
         {subtitle}

@@ -1,6 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import { useFadeUp } from './motion-utils';
 
 /**
  * "Trusted by" logo strip — vector-only placeholders styled like classic
@@ -20,13 +21,11 @@ const PLACEHOLDERS = [
 ];
 
 export function LogosRow() {
+  const fadeUp = useFadeUp();
   return (
     <section className="px-6 py-10 max-w-6xl mx-auto">
       <motion.div
-        initial={{ opacity: 0 }}
-        whileInView={{ opacity: 1 }}
-        viewport={{ once: true, margin: '-80px' }}
-        transition={{ duration: 0.7 }}
+        {...fadeUp({ y: 0, duration: 0.7 })}
         className="text-center"
       >
         <p className="text-xs uppercase tracking-[0.2em] text-white/40">
