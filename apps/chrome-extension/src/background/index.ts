@@ -806,8 +806,19 @@ async function stopCapture(reason: string): Promise<{ ok: boolean }> {
   buffers.clear();
   const cur = (await readState()).capture;
   if (cur) {
+    // Don't overload lastError with benign lifecycle reasons. The popup
+    // renders lastError in red as if it were a failure — "stopped: user" or
+    // "stopped: meet_left" are normal events, not errors. Only stash a
+    // string for genuinely unexpected stops (silence auto-stop is borderline
+    // but useful to surface).
+    const BENIGN_STOPS = new Set(['user', 'logout', 'meet_left', 'tab_closed']);
+    const nextLastError = cur.lastError
+      ? cur.lastError
+      : BENIGN_STOPS.has(reason)
+        ? null
+        : `stopped: ${reason}`;
     await writeState({
-      capture: { ...cur, closed: true, lastError: cur.lastError ?? `stopped: ${reason}` },
+      capture: { ...cur, closed: true, lastError: nextLastError },
     });
   }
   return { ok: true };

@@ -1,6 +1,6 @@
 {
   "name": "@athena/chrome-extension",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "description": "Athena Chrome extension companion. PRD F15.",
   "type": "module",
