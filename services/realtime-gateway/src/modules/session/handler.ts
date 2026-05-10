@@ -261,6 +261,11 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         const { customerText, turnId } = pending;
         pending = null;
         inflightCoach = true;
+        // Phase 2.2: tracks the last streaming text we sent so we only
+        // emit deltas (not the full accumulated text) on each frame. The
+        // overlay appends each delta to the in-flight card.
+        let lastStreamedAnswer = '';
+        let lastStreamedFollowup = '';
         try {
           const r = await coachAndPersist(
             {
@@ -269,6 +274,25 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
               turnId,
               customerText,
               contextTurns: rolling.slice(-3),
+              onPartialText: (_delta, accumulated) => {
+                // Anthropic streams raw JSON tokens. We extract just the
+                // user-visible answer_text / followup_text portions and
+                // forward incremental deltas to the rep's overlay so the
+                // glass card fills in as the model writes.
+                const partial = extractStreamingAnswer(accumulated);
+                if (
+                  partial.answer !== lastStreamedAnswer ||
+                  partial.followup !== lastStreamedFollowup
+                ) {
+                  lastStreamedAnswer = partial.answer ?? '';
+                  lastStreamedFollowup = partial.followup ?? '';
+                  sendJson(socket, {
+                    type: 'suggestion.streaming',
+                    answerText: lastStreamedAnswer || null,
+                    followupText: lastStreamedFollowup || null,
+                  });
+                }
+              },
             },
             deps,
           );
@@ -286,6 +310,41 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           if (pending) void drainPending();
         }
       };
+
+      /**
+       * Tiny JSON-aware extractor that pulls answer_text / followup_text
+       * out of an incomplete Anthropic JSON stream. We can't use
+       * JSON.parse on partial input; instead we regex for the open string
+       * literal of each field and capture everything up to (but not
+       * including) the closing unescaped quote.
+       *
+       * The character class `(?:\\.|[^"\\])*` handles `\"` and other
+       * backslash-escapes inside the value, so a partial output like
+       * `"answer_text":"They said \"yes\" but` produces the live answer
+       * `They said "yes" but` correctly.
+       */
+      // eslint-disable-next-line no-inner-declarations
+      function extractStreamingAnswer(accumulated: string): {
+        answer: string | null;
+        followup: string | null;
+      } {
+        return {
+          answer: extractJsonStringField(accumulated, 'answer_text'),
+          followup: extractJsonStringField(accumulated, 'followup_text'),
+        };
+      }
+      // eslint-disable-next-line no-inner-declarations
+      function extractJsonStringField(text: string, field: string): string | null {
+        const re = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)`);
+        const m = re.exec(text);
+        if (!m || m[1] === undefined) return null;
+        // Unescape common JSON escapes for live display.
+        return m[1]
+          .replace(/\\n/g, '\n')
+          .replace(/\\t/g, '\t')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+      }
 
       const fireProactive = async (trigger: ProactiveTrigger): Promise<void> => {
         if (!meetingId || inflightCoach || !claims) return;

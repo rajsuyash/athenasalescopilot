@@ -48,6 +48,7 @@ export class AnthropicLlmClient implements LlmClient {
         ? [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }]
         : null;
 
+      const useStream = !!req.onPartialText;
       const res = await fetch(this.endpoint, {
         method: 'POST',
         signal: ac.signal,
@@ -62,35 +63,54 @@ export class AnthropicLlmClient implements LlmClient {
           temperature: req.temperature ?? 0.2,
           ...(systemBlocks ? { system: systemBlocks } : {}),
           messages: others.map((m) => ({ role: m.role, content: m.content })),
+          ...(useStream ? { stream: true } : {}),
         }),
       });
-      const latencyMs = Date.now() - startedAt;
 
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        return errorResult<T>(`anthropic ${res.status}: ${errText.slice(0, 256)}`, this.model, latencyMs);
+        return errorResult<T>(
+          `anthropic ${res.status}: ${errText.slice(0, 256)}`,
+          this.model,
+          Date.now() - startedAt,
+        );
       }
 
-      const body = (await res.json()) as AnthropicResponse;
-      const text = body.content
-        .filter((p) => p.type === 'text' && typeof p.text === 'string')
-        .map((p) => p.text as string)
-        .join('');
+      let text: string;
+      let stopReason: AnthropicResponse['stop_reason'] = 'end_turn';
+      let model = this.model;
+      const usage: { inputTokens?: number; outputTokens?: number } = {};
 
+      if (useStream) {
+        const streamed = await consumeStream(res, req.onPartialText!);
+        text = streamed.text;
+        stopReason = streamed.stopReason;
+        model = streamed.model || this.model;
+        if (streamed.inputTokens !== undefined) usage.inputTokens = streamed.inputTokens;
+        if (streamed.outputTokens !== undefined) usage.outputTokens = streamed.outputTokens;
+      } else {
+        const body = (await res.json()) as AnthropicResponse;
+        text = body.content
+          .filter((p) => p.type === 'text' && typeof p.text === 'string')
+          .map((p) => p.text as string)
+          .join('');
+        stopReason = body.stop_reason;
+        model = body.model;
+        if (body.usage?.input_tokens !== undefined) usage.inputTokens = body.usage.input_tokens;
+        if (body.usage?.output_tokens !== undefined) usage.outputTokens = body.usage.output_tokens;
+      }
+
+      const latencyMs = Date.now() - startedAt;
       const finishReason: LlmCompleteResult['finishReason'] =
-        body.stop_reason === 'end_turn' || body.stop_reason === 'stop_sequence'
+        stopReason === 'end_turn' || stopReason === 'stop_sequence'
           ? 'stop'
-          : body.stop_reason === 'max_tokens'
+          : stopReason === 'max_tokens'
             ? 'length'
             : 'stop';
 
-      const usage: { inputTokens?: number; outputTokens?: number } = {};
-      if (body.usage?.input_tokens !== undefined) usage.inputTokens = body.usage.input_tokens;
-      if (body.usage?.output_tokens !== undefined) usage.outputTokens = body.usage.output_tokens;
-
       const out: LlmCompleteResult<T> = {
         text,
-        model: body.model,
+        model,
         finishReason,
         usage,
         latencyMs,
@@ -121,6 +141,95 @@ export class AnthropicLlmClient implements LlmClient {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Read an Anthropic SSE response stream and forward `text_delta` events to
+ * the caller's onPartialText callback. Returns the final accumulated text +
+ * stop reason + usage so the synchronous return shape matches the non-stream
+ * path. Anthropic's SSE protocol uses `event: <name>\ndata: <json>\n\n`
+ * frames; we care about content_block_delta and message_delta events.
+ */
+async function consumeStream(
+  res: Response,
+  onPartialText: (delta: string, accumulated: string) => void,
+): Promise<{
+  text: string;
+  stopReason: AnthropicResponse['stop_reason'];
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}> {
+  if (!res.body) {
+    return { text: '', stopReason: 'end_turn', model: '' };
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let acc = '';
+  let stopReason: AnthropicResponse['stop_reason'] = 'end_turn';
+  let model = '';
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n\n')) !== -1) {
+      const event = buf.slice(0, nl);
+      buf = buf.slice(nl + 2);
+      const dataLine = event
+        .split('\n')
+        .find((l) => l.startsWith('data:'))
+        ?.slice(5)
+        .trim();
+      if (!dataLine || dataLine === '[DONE]') continue;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(dataLine);
+      } catch {
+        continue;
+      }
+      const p = payload as {
+        type?: string;
+        delta?: { type?: string; text?: string; stop_reason?: AnthropicResponse['stop_reason'] };
+        message?: { model?: string; usage?: { input_tokens?: number; output_tokens?: number } };
+        usage?: { output_tokens?: number };
+      };
+      if (
+        p.type === 'content_block_delta' &&
+        p.delta?.type === 'text_delta' &&
+        typeof p.delta.text === 'string'
+      ) {
+        acc += p.delta.text;
+        try {
+          onPartialText(p.delta.text, acc);
+        } catch {
+          // Caller-supplied callback failure must not poison the stream.
+        }
+      } else if (p.type === 'message_start' && p.message) {
+        if (p.message.model) model = p.message.model;
+        if (p.message.usage?.input_tokens !== undefined) {
+          inputTokens = p.message.usage.input_tokens;
+        }
+      } else if (p.type === 'message_delta') {
+        if (p.delta?.stop_reason) stopReason = p.delta.stop_reason;
+        if (p.usage?.output_tokens !== undefined) outputTokens = p.usage.output_tokens;
+      }
+    }
+  }
+  const result: {
+    text: string;
+    stopReason: AnthropicResponse['stop_reason'];
+    model: string;
+    inputTokens?: number;
+    outputTokens?: number;
+  } = { text: acc, stopReason, model };
+  if (inputTokens !== undefined) result.inputTokens = inputTokens;
+  if (outputTokens !== undefined) result.outputTokens = outputTokens;
+  return result;
 }
 
 function splitMessages(messages: LlmMessage[]): { system: string | null; others: LlmMessage[] } {

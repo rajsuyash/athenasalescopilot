@@ -15,6 +15,14 @@ export interface LlmCompleteRequest<T = unknown> {
   /** Hard server-side deadline. Cancels in-flight on breach. */
   deadlineMs?: number;
   traceId?: string;
+  /**
+   * Token-streaming callback. When set, the SDK enables streaming on the
+   * underlying provider and invokes this callback for each text delta as it
+   * arrives from the wire. The final parsed result still arrives via the
+   * Promise return — onPartialText is purely additive for "perceived
+   * latency" UX (rendering text as it's generated). Safe to omit.
+   */
+  onPartialText?: (delta: string, accumulated: string) => void;
 }
 
 export interface LlmCompleteResult<T = unknown> {

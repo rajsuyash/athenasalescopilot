@@ -626,6 +626,18 @@ export interface CoachInput {
   customerText: string;
   contextTurns: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>;
   language?: string;
+  /**
+   * Optional streaming callback. When set, the SDK enables Anthropic's
+   * server-streaming, and this callback fires with each text delta as the
+   * model writes its JSON output. Used by the gateway to emit
+   * `suggestion.streaming` WS frames so the rep's overlay can render the
+   * answer as it generates instead of waiting for the full JSON.
+   *
+   * The accumulated arg is the full output so far, including the JSON
+   * preamble. Callers extract the user-visible string (answer_text /
+   * followup_text) using extractStreamingAnswer below.
+   */
+  onPartialText?: (delta: string, accumulated: string) => void;
 }
 
 export interface CoachOutput {
@@ -678,13 +690,22 @@ export async function coachAndPersist(
 
   const cat = intent.categories.find((c) => c !== 'none') ?? null;
   const tRetrieval = Date.now();
-  const chunks = await retrieve(
-    input.workspaceId,
-    input.customerText,
-    deps.embeddings,
-    cat,
-    input.language ?? null,
-  );
+  // Phase 2.1: retrieve() and getActiveScriptForStage() are independent DB
+  // operations — both are needed for the LLM call but neither depends on
+  // the other. Running in parallel saves the script-fetch round-trip
+  // (~30-100ms depending on cache state) on every coached turn.
+  const [chunks, scriptBody] = await Promise.all([
+    retrieve(
+      input.workspaceId,
+      input.customerText,
+      deps.embeddings,
+      cat,
+      input.language ?? null,
+    ),
+    deps.llm
+      ? getActiveScriptForStage(input.workspaceId, intent.stageSignal)
+      : Promise.resolve(null),
+  ]);
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
@@ -707,10 +728,6 @@ export async function coachAndPersist(
   if (!deps.llm) {
     out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence);
   } else {
-    const scriptBody = await getActiveScriptForStage(
-      input.workspaceId,
-      intent.stageSignal,
-    );
     const userPrompt = [
       `Customer turn:\n${input.customerText}`,
       input.contextTurns.length
@@ -737,6 +754,11 @@ export async function coachAndPersist(
       temperature: 0.2,
       maxTokens: 400,
       deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 12000),
+      // Phase 2.2: forward streaming text deltas to the gateway handler so
+      // it can emit `suggestion.streaming` WS frames. The model writes JSON;
+      // extractStreamingAnswer() parses partial JSON to surface user-visible
+      // text (answer_text / followup_text) only.
+      ...(input.onPartialText ? { onPartialText: input.onPartialText } : {}),
     });
 
     if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {

@@ -272,12 +272,100 @@ function renderSuggestion(s: OverlaySuggestion): void {
   setTimeout(dismiss, HIDE_AFTER_MS);
 }
 
-chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion }) => {
+// Phase 2.2: streaming card. The gateway sends `overlay.suggestion.streaming`
+// frames with partial answer/followup text as the LLM generates. We render
+// (or update) a single in-flight card while streaming, then the final
+// `overlay.suggestion` frame replaces it with the fully-formed card.
+let streamingCard: HTMLElement | null = null;
+let streamingAnswerEl: HTMLElement | null = null;
+let streamingFollowupEl: HTMLElement | null = null;
+
+function renderOrUpdateStreamingCard(answerText: string | null, followupText: string | null): void {
+  const root = ensureOverlayRoot();
+  if (!streamingCard) {
+    // Drop oldest if we'd exceed MAX_VISIBLE — same cap as the final-card path.
+    while (root.children.length >= MAX_VISIBLE) {
+      root.lastElementChild?.remove();
+    }
+    const card = document.createElement('div');
+    card.className = 'athena-card athena-card-streaming';
+    card.style.cssText = [
+      'background:rgba(17,24,39,0.42)',
+      'backdrop-filter:blur(28px) saturate(160%)',
+      '-webkit-backdrop-filter:blur(28px) saturate(160%)',
+      'color:#F8FAFC',
+      'border:1px solid rgba(255,255,255,0.14)',
+      'border-radius:16px',
+      'padding:14px 16px',
+      'box-shadow:0 12px 40px rgba(0,0,0,0.28),inset 0 1px 0 rgba(255,255,255,0.08)',
+      'font-size:14px',
+      'line-height:1.45',
+      'pointer-events:none',
+      'animation:athena-card-in 240ms cubic-bezier(0.22,1,0.36,1)',
+      'position:relative',
+      'overflow:hidden',
+      'text-shadow:0 1px 2px rgba(0,0,0,0.4)',
+    ].join(';');
+
+    const meta = document.createElement('div');
+    meta.style.cssText =
+      'display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:11px;color:rgba(248,250,252,0.72);font-weight:600;letter-spacing:0.4px';
+    const tag = document.createElement('span');
+    tag.textContent = 'COACH';
+    tag.style.cssText = 'color:#34D399;text-transform:uppercase;letter-spacing:0.6px';
+    meta.appendChild(tag);
+    const cursor = document.createElement('span');
+    cursor.textContent = 'typing…';
+    cursor.style.cssText = 'opacity:0.55;font-weight:500;font-style:italic';
+    meta.appendChild(cursor);
+    card.appendChild(meta);
+
+    streamingAnswerEl = document.createElement('div');
+    streamingAnswerEl.style.cssText = 'color:#F8FAFC;font-weight:500;margin-bottom:6px;min-height:1.45em';
+    card.appendChild(streamingAnswerEl);
+
+    streamingFollowupEl = document.createElement('div');
+    streamingFollowupEl.style.cssText =
+      'color:rgba(248,250,252,0.78);font-style:italic;font-size:12px;margin-bottom:4px';
+    card.appendChild(streamingFollowupEl);
+
+    root.appendChild(card);
+    streamingCard = card;
+  }
+  if (streamingAnswerEl) streamingAnswerEl.textContent = answerText ?? '';
+  if (streamingFollowupEl && followupText) {
+    streamingFollowupEl.textContent = `→ Ask next: ${followupText}`;
+  }
+}
+
+function commitStreamingCard(): void {
+  // The final `overlay.suggestion` arrived. Remove the streaming placeholder
+  // so the full final card (with citations, progress bar, dismiss button)
+  // can take its place via renderSuggestion's normal append path.
+  if (streamingCard) {
+    streamingCard.remove();
+    streamingCard = null;
+    streamingAnswerEl = null;
+    streamingFollowupEl = null;
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion; answerText?: string | null; followupText?: string | null }) => {
   if (msg?.type === 'panel.toggle') {
     return; // panel.ts handles via its own message listener if needed
   }
+  if (msg?.type === 'overlay.suggestion.streaming') {
+    try {
+      renderOrUpdateStreamingCard(msg.answerText ?? null, msg.followupText ?? null);
+    } catch (err) {
+      console.warn('[rocket-content] streaming render failed', err);
+    }
+    return;
+  }
   if (msg?.type !== 'overlay.suggestion' || !msg.suggestion) return;
   try {
+    // Replace the streaming placeholder with the final committed card.
+    commitStreamingCard();
     // Always add to history panel — even rationale-only entries are useful
     // for the rep to scroll back through. Toast only renders when there's
     // something speakable on the card; otherwise we'd flash an empty box.

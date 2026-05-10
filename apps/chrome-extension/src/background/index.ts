@@ -1034,6 +1034,66 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
   })();
 });
 
+// Phase 2.2: relay streaming suggestion deltas to the in-Meet content script
+// so the glass card fills in token-by-token instead of waiting for the full
+// JSON. Streaming frames carry only `answerText` + `followupText` (no
+// citations / confidence yet — the final `suggestion.forward` carries those).
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (!isPrivilegedSender(sender)) return;
+  const msg = raw as {
+    type?: string;
+    answerText?: string | null;
+    followupText?: string | null;
+  };
+  if (msg?.type !== 'suggestion.streaming.forward') return;
+  // Trust boundary: same sanitize budget as the final forward path. Bound
+  // length to the same MAX_SUGGESTION_FIELD_LEN so a runaway stream can't
+  // pile up unbounded text in the content script.
+  const cap = (v: unknown): string | null =>
+    typeof v === 'string' ? v.slice(0, MAX_SUGGESTION_FIELD_LEN) : null;
+  const cleanAnswer = cap(msg.answerText);
+  const cleanFollowup = cap(msg.followupText);
+  if (!cleanAnswer && !cleanFollowup) return;
+  void (async () => {
+    const active = await getActive();
+    const payload = {
+      type: 'overlay.suggestion.streaming',
+      answerText: cleanAnswer,
+      followupText: cleanFollowup,
+    };
+    if (active && active.tabId >= 0) {
+      try {
+        await chrome.tabs.sendMessage(active.tabId, payload, { frameId: 0 });
+        return;
+      } catch {
+        try {
+          await chrome.tabs.sendMessage(active.tabId, payload);
+          return;
+        } catch {
+          /* fallthrough to broadcast */
+        }
+      }
+    }
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://meet.google.com/*' });
+      for (const t of tabs) {
+        if (typeof t.id !== 'number') continue;
+        try {
+          await chrome.tabs.sendMessage(t.id, payload, { frameId: 0 });
+        } catch {
+          try {
+            await chrome.tabs.sendMessage(t.id, payload);
+          } catch {
+            /* skip */
+          }
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  })();
+});
+
 /**
  * Build the popup-facing view of state. Tokens are intentionally OMITTED —
  * even though only privileged senders reach this handler, the principle is

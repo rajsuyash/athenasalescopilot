@@ -218,6 +218,11 @@ function openSocket(): void {
         suggestionId?: string | null;
         sources?: Array<{ id: string; documentName?: string | null; score?: number }>;
       };
+      // Streaming partials from the gateway (`suggestion.streaming` frame).
+      // Display-only — final committed suggestion still arrives separately
+      // as `suggestion.generated` with the full schema.
+      answerText?: string | null;
+      followupText?: string | null;
       segment?: { text?: string; speakerLabel?: string };
     };
     try {
@@ -262,6 +267,19 @@ function openSocket(): void {
             .sendMessage({ type: 'suggestion.forward', suggestion: payload.suggestion })
             .catch(() => undefined);
         }
+        break;
+      case 'suggestion.streaming':
+        // Phase 2.2: forward token-stream deltas straight to the SW so it
+        // can broadcast them to the in-Meet content script. We don't
+        // increment `suggestionsHeard` here — that's reserved for the
+        // final committed suggestion. Streaming frames are display-only.
+        void chrome.runtime
+          .sendMessage({
+            type: 'suggestion.streaming.forward',
+            answerText: payload.answerText ?? null,
+            followupText: payload.followupText ?? null,
+          })
+          .catch(() => undefined);
         break;
       case 'error':
         // Don't echo full server payload — could include user-controllable
