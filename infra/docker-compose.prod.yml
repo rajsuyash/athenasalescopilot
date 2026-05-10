@@ -40,11 +40,18 @@ x-env: &shared-env
   GATEWAY_URL: http://realtime-gateway:4040
   # AI providers
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # Default model for non-realtime callers (postcall recap, knowledge BMC
+  # extractor, orchestrator suggest). Quality-first.
   ANTHROPIC_MODEL: claude-sonnet-4-6
+  # Phase 3: realtime-gateway hot-path model. Haiku 4.5 ~360ms TTFT vs
+  # Sonnet ~800-1200ms. Set per-service in the realtime-gateway block below;
+  # the rest of the services keep ANTHROPIC_MODEL.
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   EMBEDDING_DIMENSION: 256
   DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
-  DEEPGRAM_MODEL: nova-2
+  # Phase 1: Nova-3 default. Drop-in compatible with Nova-2; sub-300ms P95
+  # streaming finals vs Nova-2's ~450ms.
+  DEEPGRAM_MODEL: nova-3
 
 services:
   postgres:
@@ -115,7 +122,13 @@ services:
   realtime-gateway:
     image: athena:latest
     restart: unless-stopped
-    environment: *shared-env
+    # Phase 3: hot-path model override. ANTHROPIC_MODEL_HOT_PATH wins over
+    # ANTHROPIC_MODEL inside the gateway, so this puts every reactive +
+    # proactive coach call on Haiku 4.5 while leaving postcall recap and
+    # knowledge BMC on Sonnet.
+    environment:
+      <<: *shared-env
+      ANTHROPIC_MODEL_HOT_PATH: claude-haiku-4-5
     depends_on: [postgres, redis, orchestrator, postcall]
     command: ['pnpm', '--filter', '@athena/realtime-gateway', 'start']
 

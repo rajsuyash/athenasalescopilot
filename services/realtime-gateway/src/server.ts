@@ -67,6 +67,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     deterministicDimension: env.EMBEDDING_DIMENSION,
   });
 
+  // Phase 3: hot-path model selection. Reactive coach + proactive coach
+  // both run on the same WS so we use a single shared LLM client; the
+  // hot-path env var (default Haiku 4.5) wins over ANTHROPIC_MODEL when
+  // set. ANTHROPIC_MODEL stays as the explicit override knob for an
+  // emergency rollback to Sonnet without redeploy.
+  const hotPathModel = env.ANTHROPIC_MODEL ?? env.ANTHROPIC_MODEL_HOT_PATH;
   const llm =
     env.LLM_PROVIDER === 'mock'
       ? createLlmClient({ provider: 'mock' })
@@ -74,7 +80,7 @@ export async function buildApp(): Promise<FastifyInstance> {
         ? createLlmClient({
             provider: 'anthropic',
             anthropicApiKey: env.ANTHROPIC_API_KEY,
-            anthropicModel: env.ANTHROPIC_MODEL,
+            anthropicModel: hotPathModel,
           })
         : null;
 

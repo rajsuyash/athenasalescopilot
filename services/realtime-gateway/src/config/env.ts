@@ -19,7 +19,21 @@ const Schema = z.object({
 
   LLM_PROVIDER: z.enum(['anthropic', 'mock', 'auto']).default('auto'),
   ANTHROPIC_API_KEY: z.string().optional(),
+  /**
+   * Fallback model used by any non-hot-path caller in this service (e.g.
+   * proactive coach when ANTHROPIC_MODEL_HOT_PATH isn't set). Quality-first
+   * by default.
+   */
   ANTHROPIC_MODEL: z.string().optional(),
+  /**
+   * Phase 3: hot-path model used on every customer-turn coachAndPersist
+   * call. Haiku 4.5 hits ~360ms TTFT vs Sonnet's 800-1200ms with negligible
+   * quality drop on the grounded-answer + objection-reframe output we
+   * actually surface. Saves 500-800ms TTFT per coached turn. Override via
+   * Railway env to A/B against Cerebras/Groq Llama. Falls back to
+   * ANTHROPIC_MODEL when unset, so a one-env-var rollback still works.
+   */
+  ANTHROPIC_MODEL_HOT_PATH: z.string().default('claude-haiku-4-5'),
 
   MIN_DISPLAY_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.5),
   URGENCY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
