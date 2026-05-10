@@ -268,7 +268,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
               meetingId,
               turnId,
               customerText,
-              contextTurns: rolling.slice(-6),
+              contextTurns: rolling.slice(-3),
             },
             deps,
           );
@@ -298,7 +298,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
               meetingId,
               stage: currentStage,
               trigger,
-              contextTurns: rolling.slice(-6),
+              contextTurns: rolling.slice(-3),
               recentSuggestions: recentSuggestions.slice(0, 8),
             },
             deps,

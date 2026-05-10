@@ -38,6 +38,16 @@ export class AnthropicLlmClient implements LlmClient {
     const startedAt = Date.now();
 
     try {
+      // Prompt caching: when the system prompt is ≥1024 tokens (Sonnet/Haiku
+      // threshold), Anthropic returns cached prefill — saves 70-90% of input
+      // cost AND ~100-200ms TTFT on cache hit. Below the threshold the
+      // cache_control marker is harmless (Anthropic just doesn't cache).
+      // Reactive coach reuses an identical SUGGEST_SYSTEM every customer
+      // turn, so cache hit rate is near 100% within a 5-minute call window.
+      const systemBlocks = system
+        ? [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }]
+        : null;
+
       const res = await fetch(this.endpoint, {
         method: 'POST',
         signal: ac.signal,
@@ -50,7 +60,7 @@ export class AnthropicLlmClient implements LlmClient {
           model: this.model,
           max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
           temperature: req.temperature ?? 0.2,
-          ...(system ? { system } : {}),
+          ...(systemBlocks ? { system: systemBlocks } : {}),
           messages: others.map((m) => ({ role: m.role, content: m.content })),
         }),
       });

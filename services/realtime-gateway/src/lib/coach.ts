@@ -189,7 +189,7 @@ async function retrieve(
         AND kc.active = true
         AND ($3::text IS NULL OR kc.language = $3)
       ORDER BY kc.embedding <=> $1::vector
-      LIMIT 5
+      LIMIT 3
     ),
     keyword AS (
       SELECT kc.id, similarity(kc.chunk_text, $4::text) AS score
@@ -198,7 +198,7 @@ async function retrieve(
         AND kc.active = true
         AND kc.chunk_text % $4::text
       ORDER BY similarity(kc.chunk_text, $4::text) DESC
-      LIMIT 5
+      LIMIT 3
     ),
     combined AS (
       SELECT id, score FROM semantic
@@ -714,7 +714,7 @@ export async function coachAndPersist(
     const userPrompt = [
       `Customer turn:\n${input.customerText}`,
       input.contextTurns.length
-        ? `Context:\n${input.contextTurns.slice(-6).map((t) => `${t.speaker.toUpperCase()}: ${t.text}`).join('\n')}`
+        ? `Context:\n${input.contextTurns.slice(-3).map((t) => `${t.speaker.toUpperCase()}: ${t.text}`).join('\n')}`
         : null,
       `Intent: categories=${intent.categories.join(',')} stage=${intent.stageSignal} urgency=${intent.urgencyScore.toFixed(2)}`,
       scriptBody
