@@ -11,6 +11,7 @@ export type LatencyStage =
   | 'transcript_final'
   | 'intent'
   | 'retrieval'
+  | 'script_fetch'
   | 'suggestion'
   | 'coach_total';
 

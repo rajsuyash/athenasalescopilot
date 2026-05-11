@@ -487,8 +487,31 @@ export async function proactiveCoach(
   deps: CoachDeps,
 ): Promise<CoachOutput | null> {
   if (!deps.llm) return null;
+  const tStart = Date.now();
+  const emitTotal = (degraded = false): void => {
+    emitLatency({
+      workspaceId: input.workspaceId,
+      meetingId: input.meetingId,
+      stage: 'coach_total',
+      latencyMs: Date.now() - tStart,
+      degraded,
+    });
+  };
+  const tScript = Date.now();
   const scriptBody = await getActiveScriptForStage(input.workspaceId, input.stage);
-  if (!scriptBody) return null;
+  emitLatency({
+    workspaceId: input.workspaceId,
+    meetingId: input.meetingId,
+    stage: 'script_fetch',
+    latencyMs: Date.now() - tScript,
+  });
+  if (!scriptBody) {
+    // No published script for this stage — not a latency regression, but
+    // record coach_total so we have a complete picture of where the path
+    // exits.
+    emitTotal(true);
+    return null;
+  }
 
   const recent = input.recentSuggestions ?? [];
   const userPrompt = [
@@ -512,6 +535,7 @@ export async function proactiveCoach(
     .filter(Boolean)
     .join('\n\n');
 
+  const tSuggest = Date.now();
   const r = await deps.llm.complete({
     workspaceId: input.workspaceId,
     messages: [
@@ -523,8 +547,15 @@ export async function proactiveCoach(
     maxTokens: 200,
     deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 12000),
   });
+  emitLatency({
+    workspaceId: input.workspaceId,
+    meetingId: input.meetingId,
+    stage: 'suggestion',
+    latencyMs: Date.now() - tSuggest,
+  });
 
   if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
+    emitTotal(true);
     return null;
   }
 
@@ -538,13 +569,17 @@ export async function proactiveCoach(
       input.contextTurns,
     )
   ) {
+    emitTotal(true);
     return null;
   }
 
   // Strip any leftover {{placeholder}} tokens so we never surface raw
   // template syntax to the rep on a live call.
   const cleanedText = r.parsed.followup_text.replace(/\{\{[^}]*\}\}/g, 'there').trim();
-  if (cleanedText.length < 4) return null;
+  if (cleanedText.length < 4) {
+    emitTotal(true);
+    return null;
+  }
 
   const conf = clamp01(r.parsed.confidence);
   const stageSignal: StageSignal = (STAGE_SIGNALS as readonly string[]).includes(input.stage)
@@ -578,6 +613,7 @@ export async function proactiveCoach(
       rationale: `[proactive:${input.trigger}] ${r.parsed.rationale}`,
     },
   });
+  emitTotal();
 
   return {
     type: r.parsed.type,
@@ -679,11 +715,14 @@ export async function coachAndPersist(
   });
 
   if (intent.urgencyScore < deps.urgencyThreshold) {
+    // Tagged degraded:true so the analytics aggregator can exclude these
+    // non-events from p50/p95 — the rep never sees an LLM call here.
     emitLatency({
       workspaceId: input.workspaceId,
       meetingId: input.meetingId,
       stage: 'coach_total',
       latencyMs: Date.now() - tStart,
+      degraded: true,
     });
     return suppressed(intent, 'urgency below threshold');
   }

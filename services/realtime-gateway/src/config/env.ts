@@ -36,7 +36,12 @@ const Schema = z.object({
   ANTHROPIC_MODEL_HOT_PATH: z.string().default('claude-haiku-4-5'),
 
   MIN_DISPLAY_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.5),
-  URGENCY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.5),
+  // Lowered 0.5 → 0.35 (2026-05-11): 24h prod data showed 98/98 customer
+  // turns were skipped by the urgency gate. Single-signal turns (e.g., a
+  // bare "?" without an intent keyword match) need to surface to the LLM.
+  // Quality is still gated downstream by MIN_DISPLAY_CONFIDENCE; this gate
+  // is for cost control, not card quality.
+  URGENCY_THRESHOLD: z.coerce.number().min(0).max(1).default(0.35),
 
   /** URL of the postcall-service for auto-recap dispatch. */
   POSTCALL_URL: z.string().url().default('http://localhost:4030'),

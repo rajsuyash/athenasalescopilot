@@ -54,6 +54,9 @@ const LATENCY_BUDGETS: Record<string, number> = {
   transcript_final: 300,
   intent: 400,
   retrieval: 800,
+  // Script fetch is in-process cache (25s TTL) after warmup; cold DB hit is
+  // 30-80ms. 100ms is the soft budget — anything higher is a Prisma stall.
+  script_fetch: 100,
   suggestion: 3000,
   coach_total: 2000,
 };
@@ -66,8 +69,11 @@ function percentile(sorted: number[], p: number): number {
 
 export async function latency(workspaceId: string, days = 7): Promise<LatencyStats> {
   const since = new Date(Date.now() - days * DAY_MS);
+  // Filter out degraded events (e.g. urgency-skip non-events) so the
+  // dashboard percentiles reflect real pipeline work, not the early-return
+  // 0ms rows that drown out the real distribution.
   const rows = await prisma.latencyEvent.findMany({
-    where: { workspaceId, createdAt: { gte: since } },
+    where: { workspaceId, createdAt: { gte: since }, degraded: false },
     select: { stage: true, latencyMs: true },
     take: 50_000,
   });
