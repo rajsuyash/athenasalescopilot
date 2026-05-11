@@ -170,10 +170,10 @@ function renderSuggestion(s: OverlaySuggestion): void {
     'color:#F8FAFC',
     'border:1px solid rgba(255,255,255,0.14)',
     'border-radius:16px',
-    'padding:14px 16px',
+    'padding:16px 18px',
     'box-shadow:0 12px 40px rgba(0,0,0,0.28),inset 0 1px 0 rgba(255,255,255,0.08)',
-    'font-size:14px',
-    'line-height:1.45',
+    'font-size:17px',
+    'line-height:1.5',
     // Card body is click-through; only buttons opt in to pointer events.
     'pointer-events:none',
     'animation:athena-card-in 240ms cubic-bezier(0.22,1,0.36,1)',
@@ -232,17 +232,21 @@ function renderSuggestion(s: OverlaySuggestion): void {
   meta.appendChild(close);
   card.appendChild(meta);
 
+  // One unified speak-this style. No prefix labels, no italic "Ask next:" —
+  // the rep reads the line out loud. We show whichever of answerText /
+  // followupText is populated (some types fill both; in that case both lines
+  // render identically and the rep speaks the whole thing).
+  const SPEAK_STYLE = 'color:#F8FAFC;font-weight:500;font-size:17px;line-height:1.5;margin-bottom:6px';
   if (s.answerText) {
     const a = document.createElement('div');
     a.textContent = s.answerText;
-    a.style.cssText = 'color:#F8FAFC;font-weight:500;margin-bottom:6px';
+    a.style.cssText = SPEAK_STYLE;
     card.appendChild(a);
   }
   if (s.followupText) {
     const f = document.createElement('div');
-    f.textContent = `\u2192 Ask next: ${s.followupText}`;
-    f.style.cssText =
-      'color:rgba(248,250,252,0.78);font-style:italic;font-size:12px;margin-bottom:4px';
+    f.textContent = s.followupText;
+    f.style.cssText = SPEAK_STYLE;
     card.appendChild(f);
   }
   if (s.sources && s.sources.length > 0) {
@@ -296,10 +300,10 @@ function renderOrUpdateStreamingCard(answerText: string | null, followupText: st
       'color:#F8FAFC',
       'border:1px solid rgba(255,255,255,0.14)',
       'border-radius:16px',
-      'padding:14px 16px',
+      'padding:16px 18px',
       'box-shadow:0 12px 40px rgba(0,0,0,0.28),inset 0 1px 0 rgba(255,255,255,0.08)',
-      'font-size:14px',
-      'line-height:1.45',
+      'font-size:17px',
+      'line-height:1.5',
       'pointer-events:none',
       'animation:athena-card-in 240ms cubic-bezier(0.22,1,0.36,1)',
       'position:relative',
@@ -320,22 +324,21 @@ function renderOrUpdateStreamingCard(answerText: string | null, followupText: st
     meta.appendChild(cursor);
     card.appendChild(meta);
 
+    const SPEAK_STYLE =
+      'color:#F8FAFC;font-weight:500;font-size:17px;line-height:1.5;margin-bottom:6px;min-height:1.5em';
     streamingAnswerEl = document.createElement('div');
-    streamingAnswerEl.style.cssText = 'color:#F8FAFC;font-weight:500;margin-bottom:6px;min-height:1.45em';
+    streamingAnswerEl.style.cssText = SPEAK_STYLE;
     card.appendChild(streamingAnswerEl);
 
     streamingFollowupEl = document.createElement('div');
-    streamingFollowupEl.style.cssText =
-      'color:rgba(248,250,252,0.78);font-style:italic;font-size:12px;margin-bottom:4px';
+    streamingFollowupEl.style.cssText = SPEAK_STYLE;
     card.appendChild(streamingFollowupEl);
 
     root.appendChild(card);
     streamingCard = card;
   }
   if (streamingAnswerEl) streamingAnswerEl.textContent = answerText ?? '';
-  if (streamingFollowupEl && followupText) {
-    streamingFollowupEl.textContent = `→ Ask next: ${followupText}`;
-  }
+  if (streamingFollowupEl) streamingFollowupEl.textContent = followupText ?? '';
 }
 
 function commitStreamingCard(): void {

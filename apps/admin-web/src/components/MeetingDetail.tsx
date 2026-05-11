@@ -382,9 +382,11 @@ function SuggestionInline({
           </button>
         </div>
       </div>
-      {s.answerText ? <div className="text-white/90">{s.answerText}</div> : null}
+      {s.answerText ? (
+        <div className="text-white/95 text-lg leading-relaxed">{s.answerText}</div>
+      ) : null}
       {s.followupText ? (
-        <div className="text-white/60 italic">Ask next: {s.followupText}</div>
+        <div className="text-white/95 text-lg leading-relaxed">{s.followupText}</div>
       ) : null}
       {coachOpen ? <CoachingThread suggestionId={s.id} canFlag={canFlag} /> : null}
     </div>

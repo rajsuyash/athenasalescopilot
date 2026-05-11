@@ -162,8 +162,8 @@ function buildTree(root: ShadowRoot): void {
       color: rgba(248,250,252,0.55); margin-left: auto;
       font-weight: 400; text-transform: none; letter-spacing: 0.2px;
     }
-    .card .answer { color: #F8FAFC; margin-bottom: 4px; line-height: 1.45; font-weight: 500; }
-    .card .followup { color: rgba(248,250,252,0.78); font-style: italic; font-size: 12px; line-height: 1.45; }
+    .card .answer { color: #F8FAFC; margin-bottom: 6px; line-height: 1.5; font-weight: 500; font-size: 16px; }
+    .card .followup { color: #F8FAFC; margin-bottom: 4px; line-height: 1.5; font-weight: 500; font-size: 16px; }
     .footer {
       padding: 10px 14px; border-top: 1px solid rgba(255,255,255,0.08);
       font-size: 11px; color: rgba(248,250,252,0.55); text-align: center;
@@ -332,7 +332,7 @@ function render(): void {
       if (s.followupText) {
         const f = document.createElement('div');
         f.className = 'followup';
-        f.textContent = `\u2192 ${s.followupText}`;
+        f.textContent = s.followupText;
         card.appendChild(f);
       }
       listEl.appendChild(card);
