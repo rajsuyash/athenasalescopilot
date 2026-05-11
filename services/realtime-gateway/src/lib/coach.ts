@@ -215,7 +215,7 @@ async function retrieve(
     JOIN knowledge_documents kd ON kd.id = kdv.document_id
     WHERE kc.workspace_id = $2::uuid
     ORDER BY a.score DESC
-    LIMIT 5
+    LIMIT 3
     `,
     vectorLiteral(qVec),
     workspaceId,
