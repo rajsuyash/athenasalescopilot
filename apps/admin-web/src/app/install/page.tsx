@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     'Step-by-step install guide for the Rocket Sales Agent Chrome extension. Sideload the .zip while we wait for Web Store approval.',
 };
 
-const EXT_VERSION = '0.1.12';
+const EXT_VERSION = '0.1.13';
 const ZIP_HREF = `/downloads/rocket-sales-agent-${EXT_VERSION}.zip`;
 const ZIP_SIZE_KB = 25;
 const WEB_STORE_URL =
@@ -82,7 +82,7 @@ export default function InstallPage() {
                 <span>Download .zip ({ZIP_SIZE_KB} KB)</span>
               </a>
               <p className="mt-2 text-center text-[11px] text-white/40">
-                v{EXT_VERSION} · Bigger speak-this text · cleaner cards
+                v{EXT_VERSION} · Fixes tabCapture invocation error
               </p>
             </div>
           </div>

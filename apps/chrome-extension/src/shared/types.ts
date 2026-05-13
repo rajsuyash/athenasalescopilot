@@ -23,7 +23,13 @@ export type RuntimeMessage =
   | { type: 'auth.pair'; code: string }
   | { type: 'auth.logout' }
   | { type: 'demo.injectCaptions'; meetingId: string }
-  | { type: 'capture.start' }
+  // streamId is minted by the popup via chrome.tabCapture.getMediaStreamId
+  // BEFORE this message is sent. Chrome MV3 raises "Extension has not been
+  // invoked for the current page" if getMediaStreamId runs from a
+  // chrome.runtime.onMessage handler — the user-invocation context doesn't
+  // propagate through message passing. The popup IS a valid invocation
+  // surface, so it mints the streamId and ships it to the SW.
+  | { type: 'capture.start'; streamId: string }
   | { type: 'capture.stop' }
   | { type: 'capture.refreshToken' };
 

@@ -656,7 +656,16 @@ async function tearDownOffscreen(): Promise<void> {
   }
 }
 
-async function startCapture(): Promise<{ ok: boolean; error?: string }> {
+async function startCapture(streamId: string): Promise<{ ok: boolean; error?: string }> {
+  if (!streamId) {
+    // Popup is supposed to mint this — see RuntimeMessage type doc. If we
+    // ever get here without one, it means a caller is on the old wire
+    // format. Surface a clear error rather than silently calling
+    // tabCapture.getMediaStreamId from this onMessage handler (which
+    // Chrome rejects with "Extension has not been invoked for the current
+    // page").
+    return { ok: false, error: 'streamId missing — popup must mint via tabCapture' };
+  }
   const active = await getActive();
   if (!active) return { ok: false, error: 'no Meet detected' };
   const settings = await getSettings();
@@ -693,38 +702,11 @@ async function startCapture(): Promise<{ ok: boolean; error?: string }> {
 
   await ensureOffscreen();
 
-  let streamId: string;
-  try {
-    streamId = await new Promise<string>((resolve, reject) => {
-      chrome.tabCapture.getMediaStreamId(
-        { targetTabId: active.tabId },
-        (id) => {
-          if (chrome.runtime.lastError || !id) {
-            reject(new Error(chrome.runtime.lastError?.message ?? 'no streamId'));
-            return;
-          }
-          resolve(id);
-        },
-      );
-    });
-  } catch (err) {
-    await tearDownOffscreen();
-    const errMsg = (err as Error).message;
-    await writeState({
-      capture: {
-        meetingId: active.meetingId,
-        startedAt: new Date().toISOString(),
-        shipped: 0,
-        finalsHeard: 0,
-        suggestionsHeard: 0,
-        lastError: `tabCapture: ${errMsg}`,
-        sessionId: null,
-        closed: true,
-        reconnectAttempt: null,
-      },
-    });
-    return { ok: false, error: errMsg };
-  }
+  // streamId was minted by the popup. We don't call
+  // chrome.tabCapture.getMediaStreamId here — Chrome MV3 rejects it from
+  // onMessage handlers with "Extension has not been invoked for the
+  // current page" because the user-invocation context doesn't propagate
+  // through message passing.
 
   const initial: CaptureStatus = {
     meetingId: active.meetingId,
@@ -1223,7 +1205,7 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
         sendResponse({ ok: false, error: 'untrusted_sender' });
         return;
       }
-      const r = await startCapture();
+      const r = await startCapture(msg.streamId);
       sendResponse(r);
     } else if (msg.type === 'capture.stop') {
       if (!isPrivilegedSender(sender)) {

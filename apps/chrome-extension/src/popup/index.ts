@@ -185,9 +185,54 @@ function activeCard(
         } catch {
           /* continue without mic — tab audio still ships */
         }
+
+        // Mint the tabCapture streamId HERE in the popup. The popup is a
+        // valid extension-invocation surface; the SW's onMessage handler
+        // is NOT — Chrome raises "Extension has not been invoked for the
+        // current page" if getMediaStreamId runs from onMessage. Doing it
+        // here also targets the right tab even if it isn't currently
+        // focused: the `tabCapture` permission + popup-invocation grant
+        // covers `targetTabId`.
+        let streamId: string;
+        try {
+          streamId = await new Promise<string>((resolve, reject) => {
+            chrome.tabCapture.getMediaStreamId(
+              { targetTabId: active.tabId },
+              (id) => {
+                if (chrome.runtime.lastError || !id) {
+                  reject(
+                    new Error(
+                      chrome.runtime.lastError?.message ?? 'no streamId returned',
+                    ),
+                  );
+                  return;
+                }
+                resolve(id);
+              },
+            );
+          });
+        } catch (err) {
+          cap.textContent = `Failed: ${(err as Error).message}`;
+          setTimeout(() => void render(), 2500);
+          return;
+        }
+
+        const resp = (await chrome.runtime.sendMessage({
+          type: 'capture.start',
+          streamId,
+        } satisfies RuntimeMessage)) as { ok: boolean; error?: string };
+        if (!resp?.ok) {
+          cap.textContent = `Failed: ${resp?.error ?? 'unknown'}`;
+          setTimeout(() => void render(), 2000);
+        } else {
+          void render();
+        }
+        return;
       }
+
+      // Stop path — no streamId needed.
       const resp = (await chrome.runtime.sendMessage({
-        type: capturing ? 'capture.stop' : 'capture.start',
+        type: 'capture.stop',
       } satisfies RuntimeMessage)) as { ok: boolean; error?: string };
       if (!resp?.ok) {
         cap.textContent = `Failed: ${resp?.error ?? 'unknown'}`;
