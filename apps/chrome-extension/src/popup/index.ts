@@ -199,12 +199,12 @@ function activeCard(
             chrome.tabCapture.getMediaStreamId(
               { targetTabId: active.tabId },
               (id) => {
-                if (chrome.runtime.lastError || !id) {
-                  reject(
-                    new Error(
-                      chrome.runtime.lastError?.message ?? 'no streamId returned',
-                    ),
-                  );
+                // Snapshot lastError as the first line — Chrome clears it
+                // once the callback returns and any await inside the
+                // reject path could race with that reset.
+                const err = chrome.runtime.lastError;
+                if (err || !id) {
+                  reject(new Error(err?.message ?? 'no streamId returned'));
                   return;
                 }
                 resolve(id);
