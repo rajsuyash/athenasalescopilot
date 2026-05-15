@@ -1,12 +1,18 @@
 'use client';
 
-import { motion, useInView } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
-
 /**
- * Counter strip — three trust metrics that count up when scrolled into view.
- * Uses Framer Motion's `useInView` to trigger the animation only on first
- * appearance (reduces CPU on long pages).
+ * Counter strip — three trust metrics under the hero.
+ *
+ * The earlier version animated a count-up from 0 → value when the strip
+ * entered the viewport. Caught in the 2026-05-15 design audit: users who
+ * skim without scrolling (the 5-second-decision crowd) and headless
+ * renderers see the strip with the labels but the numbers stuck at 0.
+ * That undermines the entire trust signal — "0.0s median latency" reads
+ * as a broken page, not a metric.
+ *
+ * Fix: render the final values immediately. The count-up flourish is
+ * gone; the trust strip is now a static display. Worth the trade — a
+ * stat strip's job is to be read instantly, not animate prettily.
  */
 const STATS = [
   { value: 1.4, suffix: 's', label: 'Median suggestion latency', decimals: 1 },
@@ -39,39 +45,14 @@ function Stat({
   decimals: number;
   divider: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const inView = useInView(ref, { once: true, margin: '-60px' });
-  const [n, setN] = useState(0);
-
-  useEffect(() => {
-    if (!inView) return;
-    const start = performance.now();
-    const duration = 1400;
-    let raf = 0;
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
-      setN(value * eased);
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [inView, value]);
-
   return (
     <div
-      ref={ref}
       className={`relative px-6 py-8 ${divider ? 'md:border-l md:border-white/5' : ''}`}
     >
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={inView ? { opacity: 1, y: 0 } : {}}
-        transition={{ duration: 0.6 }}
-        className="text-4xl md:text-5xl font-semibold tracking-tight"
-      >
-        <span className="text-white">{n.toFixed(decimals)}</span>
+      <div className="text-4xl md:text-5xl font-semibold tracking-tight">
+        <span className="text-white">{value.toFixed(decimals)}</span>
         <span className="text-accent">{suffix}</span>
-      </motion.div>
+      </div>
       <p className="mt-2 text-sm text-white/50">{label}</p>
     </div>
   );

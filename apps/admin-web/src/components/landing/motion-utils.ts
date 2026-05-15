@@ -47,8 +47,15 @@ export function useFadeUp(): (opts?: FadeUpOptions) => MotionProps {
       return { initial: false } satisfies MotionProps;
     }
     const { y = 24, delay = 0, duration = 0.6 } = opts;
+    // Content renders VISIBLE on first paint — `initial` only translates by
+    // `y`, never goes to opacity 0. Sections below the fold still slide up
+    // when scrolled into view, but a user who never scrolls (skim-and-bounce)
+    // sees the full page, not 70% empty space waiting for the
+    // IntersectionObserver to fire. Caught in 2026-05-15 design audit:
+    // headless renderers and 5-second skim users were seeing an empty page
+    // because every section started at opacity 0.
     return {
-      initial: { opacity: 0, y },
+      initial: { opacity: 1, y },
       whileInView: { opacity: 1, y: 0 },
       viewport: { once: true, margin: '0px 0px -100px 0px' },
       transition: { duration, ease: [0.16, 1, 0.3, 1], delay },
