@@ -123,3 +123,4 @@ pgdata/
 *.m4a
 *.mp3
 audio-samples/
+.claude/screenshots/

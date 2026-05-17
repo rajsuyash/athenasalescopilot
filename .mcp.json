@@ -1,0 +1,12 @@
+{
+  "_comment": "Auto-registers Playwright MCP so Claude Code can drive a browser, read console errors, capture screenshots, and verify UI changes without the user copy-pasting screenshots. Run 'npx @playwright/mcp install' once after cloning. Headless by default — flip headless to false for debugging visually. DEV_URL points at prod because Athena has no local dev server running by default; flip to http://localhost:3000 when you spin one up.",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--headless", "--browser=chromium"],
+      "env": {
+        "DEV_URL": "https://athena-admin-web-production.up.railway.app"
+      }
+    }
+  }
+}
