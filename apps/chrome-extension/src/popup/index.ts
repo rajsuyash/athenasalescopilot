@@ -31,7 +31,23 @@ function isDevBuild(prefs: PopupPrefs): boolean {
 
 async function render(): Promise<void> {
   if (!root) return;
-  const { active, account, prefs, captionStats, inbox, capture } = await load();
+  const response = await load();
+  // Defensive: the SW responds with `{ok:false, error:'untrusted_sender'}`
+  // when the popup isn't a privileged context (e.g. opened as a regular
+  // tab in test harnesses, or briefly during SW restart). The shape has
+  // no `prefs`, so destructuring crashed with "Cannot read properties of
+  // undefined (reading 'gatewayUrl')" in the next line. Render a clear
+  // unavailable state instead of a stack trace. Caught in /uat 2026-05-17.
+  if (!response || !response.prefs) {
+    root.replaceChildren();
+    const card = document.createElement('div');
+    card.className = 'card muted';
+    card.textContent =
+      'Extension not ready. Close and re-open the popup, or reload the extension in chrome://extensions.';
+    root.appendChild(card);
+    return;
+  }
+  const { active, account, prefs, captionStats, inbox, capture } = response;
   const devMode = isDevBuild(prefs);
   root.replaceChildren();
   root.appendChild(activeCard(active, captionStats, capture, account.isSignedIn, devMode));

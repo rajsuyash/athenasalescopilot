@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Athena Companion",
   "short_name": "Athena",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Real-time sales coach for Google Meet. Captures call audio, transcribes, and surfaces grounded answers in the Meet tab.",
   "author": "Athena",
   "homepage_url": "https://athena-admin-web-production.up.railway.app",
