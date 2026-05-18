@@ -129,10 +129,17 @@ function ensureOverlayRoot(): HTMLDivElement {
   root.setAttribute('aria-live', 'polite');
   root.style.cssText = [
     'position:fixed',
-    'top:24px',
+    // 6vh from the top — clears the Chrome bookmark bar + Meet's own
+    // top header reliably across viewport sizes. Top of card was being
+    // clipped at the old 24px when the user had bookmarks visible.
+    'top:6vh',
     'left:50%',
     'transform:translateX(-50%)',
-    'max-height:15vh',
+    // Old max-height was 15vh — barely fit one card at 17px/1.5. With two
+    // cards (~120px each + 10px gap = ~250px ≈ 23vh on a 1080px viewport)
+    // the second card pushed the first into a clipping flex shrink. Bumped
+    // to 40vh so up to MAX_VISIBLE=2 cards never have to compete for space.
+    'max-height:40vh',
     'max-width:min(560px,60vw)',
     'width:max-content',
     // Recording pill sits at 2147483647; stack lives one layer below so the
@@ -150,6 +157,42 @@ function ensureOverlayRoot(): HTMLDivElement {
   ].join(';');
   document.documentElement.appendChild(root);
   return root;
+}
+
+/**
+ * Append a card with a FLIP slide animation so existing cards visibly
+ * slide DOWN to make room for the new one (instead of jumping). With
+ * `flex-direction:column-reverse`, the newest DOM child renders at the
+ * visual top — so the previously-top card needs to drop ~(card height +
+ * gap)px to its new position. FLIP records the old geometry, lets flex
+ * re-lay-out, then animates each pre-existing card from its old position
+ * back to identity.
+ *
+ * `prefers-reduced-motion` skips the animation entirely.
+ */
+function appendCardWithSlide(root: HTMLElement, card: HTMLElement): void {
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const existing = Array.from(root.children) as HTMLElement[];
+  if (reduced || existing.length === 0) {
+    root.appendChild(card);
+    return;
+  }
+  const oldRects = new Map<HTMLElement, DOMRect>();
+  for (const el of existing) oldRects.set(el, el.getBoundingClientRect());
+  root.appendChild(card);
+  for (const el of existing) {
+    const old = oldRects.get(el);
+    if (!old) continue;
+    const next = el.getBoundingClientRect();
+    const dy = old.top - next.top;
+    if (Math.abs(dy) < 1) continue;
+    el.style.transition = 'none';
+    el.style.transform = `translateY(${dy}px)`;
+    requestAnimationFrame(() => {
+      el.style.transition = 'transform 240ms cubic-bezier(0.22,1,0.36,1)';
+      el.style.transform = '';
+    });
+  }
 }
 
 function renderSuggestion(s: OverlaySuggestion): void {
@@ -272,7 +315,7 @@ function renderSuggestion(s: OverlaySuggestion): void {
   ].join(';');
   card.appendChild(progress);
 
-  root.appendChild(card);
+  appendCardWithSlide(root, card);
   setTimeout(dismiss, HIDE_AFTER_MS);
 }
 
@@ -334,7 +377,7 @@ function renderOrUpdateStreamingCard(answerText: string | null, followupText: st
     streamingFollowupEl.style.cssText = SPEAK_STYLE;
     card.appendChild(streamingFollowupEl);
 
-    root.appendChild(card);
+    appendCardWithSlide(root, card);
     streamingCard = card;
   }
   if (streamingAnswerEl) streamingAnswerEl.textContent = answerText ?? '';
