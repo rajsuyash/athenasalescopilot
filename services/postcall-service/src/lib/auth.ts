@@ -39,10 +39,18 @@ export const authPlugin = fp<{ secret: string }>(async (app: FastifyInstance, op
       this.auth = claims;
       return claims;
     } catch (err) {
-      if ((err as { code?: string }).code === 'FAST_JWT_EXPIRED') {
+      const code = (err as { code?: string }).code;
+      // @fastify/jwt expired-token code is FST_JWT_AUTHORIZATION_TOKEN_EXPIRED.
+      // The original FAST_JWT_EXPIRED check was a typo carried over from
+      // @fast-jwt — it never fired, so expired tokens were misclassified
+      // as TOKEN_INVALID. Caught in /uat live test 2026-05-18.
+      if (
+        code === 'FST_JWT_AUTHORIZATION_TOKEN_EXPIRED' ||
+        code === 'FAST_JWT_EXPIRED'
+      ) {
         throw Object.assign(new Error('TOKEN_EXPIRED'), { statusCode: 401, code: 'TOKEN_EXPIRED' });
       }
-      if ((err as { code?: string }).code === 'MISSING_WORKSPACE_CLAIM') throw err;
+      if (code === 'MISSING_WORKSPACE_CLAIM') throw err;
       throw Object.assign(new Error('TOKEN_INVALID'), { statusCode: 401, code: 'TOKEN_INVALID' });
     }
   });

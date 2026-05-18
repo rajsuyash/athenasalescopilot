@@ -62,7 +62,20 @@ export const authPlugin = fp<AuthOpts>(async (app: FastifyInstance, opts) => {
       // ApiError raised by us above (e.g. MISSING_WORKSPACE_CLAIM) — pass through.
       if (err instanceof ApiError) throw err;
       const jwtCode = (err as { code?: string }).code;
-      if (jwtCode === 'FAST_JWT_EXPIRED') throw Errors.tokenExpired();
+      // @fastify/jwt emits FST_JWT_AUTHORIZATION_TOKEN_EXPIRED on expired
+      // tokens. The earlier `FAST_JWT_EXPIRED` check was a typo (that's
+      // the @fast-jwt package's code, not @fastify/jwt's), so expired
+      // tokens were being misclassified as TOKEN_INVALID. Surfaced when a
+      // live UAT test on 2026-05-18 showed an expired ext token returning
+      // `[FST_JWT_AUTHORIZATION_TOKEN_EXPIRED]` to the popup. We accept
+      // both codes for forward-compat in case the underlying JWT library
+      // ever swaps.
+      if (
+        jwtCode === 'FST_JWT_AUTHORIZATION_TOKEN_EXPIRED' ||
+        jwtCode === 'FAST_JWT_EXPIRED'
+      ) {
+        throw Errors.tokenExpired();
+      }
       // Surface the underlying JWT verification reason in details so reps
       // can see "FAST_JWT_INVALID_SIGNATURE" / "FAST_JWT_MALFORMED" /
       // "FAST_JWT_MISSING_SIGNATURE" / etc. instead of an opaque
