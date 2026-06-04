@@ -396,16 +396,32 @@ function commitStreamingCard(): void {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion; answerText?: string | null; followupText?: string | null }) => {
+chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion; answerText?: string | null; followupText?: string | null; text?: string }) => {
   if (msg?.type === 'panel.toggle') {
     return; // panel.ts handles via its own message listener if needed
+  }
+  if (msg?.type === 'overlay.transcript.customer' && typeof msg.text === 'string') {
+    // Wire the live status block to STT customer finalizations so the
+    // rep sees what the coach is reacting to.
+    try {
+      panel.setCustomerTurn(msg.text);
+    } catch (err) {
+      console.warn('[rocket-content] panel.setCustomerTurn failed', err);
+    }
+    updateCoachChip('thinking');
+    return;
   }
   if (msg?.type === 'overlay.suggestion.streaming') {
     try {
       renderOrUpdateStreamingCard(msg.answerText ?? null, msg.followupText ?? null);
+      // Mirror the streamed text into the live status panel so the rep
+      // sees the coach drafting in real time, not just the final glass
+      // card pinned at the top of the viewport.
+      panel.setDraft(msg.answerText ?? null, msg.followupText ?? null);
     } catch (err) {
       console.warn('[rocket-content] streaming render failed', err);
     }
+    updateCoachChip('drafting');
     return;
   }
   if (msg?.type !== 'overlay.suggestion' || !msg.suggestion) return;
@@ -416,6 +432,10 @@ chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: Overlay
     // for the rep to scroll back through. Toast only renders when there's
     // something speakable on the card; otherwise we'd flash an empty box.
     panel.add(msg.suggestion);
+    updateCoachChip('delivered');
+    setTimeout(() => {
+      if (coachChipState.phase === 'delivered') updateCoachChip('listening');
+    }, DELIVERED_LINGER_MS);
     const speakable = !!(msg.suggestion.answerText || msg.suggestion.followupText);
     // Lightweight tap so reps + support can verify in DevTools that the
     // gateway → SW → content-script pipe is alive.
@@ -492,8 +512,19 @@ function removePill(): void {
 function syncPillFromStorage(): void {
   void chrome.storage.local.get(['capture']).then((s) => {
     const cap = (s.capture ?? null) as { closed?: boolean } | null;
-    if (cap && !cap.closed) ensurePillRoot();
+    const live = !!cap && !cap.closed;
+    if (live) ensurePillRoot();
     else removePill();
+    // Mirror to the side panel's live status. Lets the pill state drive
+    // both the privacy indicator AND the panel's "Capture off" → "Listening"
+    // transition without a second SW round-trip.
+    try {
+      panel.setCapturing(live);
+    } catch {
+      /* panel not yet mounted on this page — safe to ignore */
+    }
+    coachChipState.capturing = live;
+    updateCoachChip(live ? 'listening' : 'off');
   });
 }
 
@@ -502,6 +533,202 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes.capture) return;
   syncPillFromStorage();
 });
+
+// ─── Always-visible coach status chip ──────────────────────────────────────
+//
+// A permanent frosted-glass chip stacked below the recording pill. Shows the
+// coach pipeline state in real time without the rep having to open the history
+// panel. Driven entirely by events the content script already receives.
+
+const COACH_CHIP_ID = 'athena-coach-chip';
+const CHIP_POS_KEY = 'athenaChipPos';
+const THINK_TIMEOUT_MS = 5_000;
+const DELIVERED_LINGER_MS = 2_500;
+
+const clampChipY    = (v: number) => Math.min(Math.max(v, 8), window.innerHeight - 48);
+const clampChipLeft = (v: number) => Math.min(Math.max(v, 8), window.innerWidth  - 120);
+
+type CoachPhase = 'off' | 'listening' | 'thinking' | 'drafting' | 'delivered';
+
+interface CoachChipState {
+  capturing: boolean;
+  phase: CoachPhase;
+  phaseStartedAt: number;
+}
+
+const coachChipState: CoachChipState = {
+  capturing: false,
+  phase: 'off',
+  phaseStartedAt: 0,
+};
+let coachChipTick: number | null = null;
+
+function ensureCoachChip(): HTMLElement {
+  let chip = document.getElementById(COACH_CHIP_ID);
+  if (chip) return chip;
+
+  chip = document.createElement('div');
+  chip.id = COACH_CHIP_ID;
+  // role=status + aria-live=polite so screen-reader users hear state
+  // transitions (Listening → Thinking → Drafting → Delivered) without
+  // interrupting active speech. aria-atomic=true announces the full label
+  // on every change, not just the diff.
+  chip.setAttribute('role', 'status');
+  chip.setAttribute('aria-live', 'polite');
+  chip.setAttribute('aria-atomic', 'true');
+  chip.style.cssText = [
+    'position:fixed',
+    'top:60px',
+    'right:24px',
+    'z-index:2147483647',
+    'background:rgba(17,24,39,0.42)',
+    'backdrop-filter:blur(28px) saturate(160%)',
+    '-webkit-backdrop-filter:blur(28px) saturate(160%)',
+    'color:#F8FAFC',
+    'border:1px solid rgba(255,255,255,0.14)',
+    'padding:6px 12px 6px 10px',
+    'border-radius:999px',
+    'font:600 11px Inter,-apple-system,system-ui,sans-serif',
+    'letter-spacing:0.4px',
+    'box-shadow:0 12px 40px rgba(0,0,0,0.28),inset 0 1px 0 rgba(255,255,255,0.08)',
+    'text-shadow:0 1px 2px rgba(0,0,0,0.4)',
+    'pointer-events:auto',
+    'cursor:grab',
+    'display:none',
+    'align-items:center',
+    'gap:8px',
+    'transition:opacity 300ms ease',
+  ].join(';');
+
+  const dot = document.createElement('span');
+  dot.id = 'athena-coach-dot';
+  dot.style.cssText =
+    'width:8px;height:8px;border-radius:999px;flex-shrink:0';
+  chip.appendChild(dot);
+
+  const label = document.createElement('span');
+  label.id = 'athena-coach-label';
+  chip.appendChild(label);
+
+  if (!document.getElementById('athena-coach-chip-style')) {
+    const style = document.createElement('style');
+    style.id = 'athena-coach-chip-style';
+    style.textContent = [
+      '@keyframes athena-coach-pulse-slow { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.85)} }',
+      '@keyframes athena-coach-pulse-fast { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.3;transform:scale(0.80)} }',
+      '@media (prefers-reduced-motion: reduce) { #athena-coach-dot { animation: none !important; } }',
+    ].join('');
+    document.documentElement.appendChild(style);
+  }
+
+  document.documentElement.appendChild(chip);
+
+  // Restore saved position (async; defaults to top:60px/right:24px until resolved)
+  chrome.storage.local.get([CHIP_POS_KEY], (res) => {
+    const pos = res[CHIP_POS_KEY] as { top: number; left: number } | undefined;
+    if (pos) {
+      chip!.style.top   = `${clampChipY(pos.top)}px`;
+      chip!.style.left  = `${clampChipLeft(pos.left)}px`;
+      chip!.style.right = 'auto';
+    }
+  });
+
+  // Drag-to-reposition (FLIP-less pointer capture approach)
+  let dragging = false;
+  let ox = 0, oy = 0;
+
+  chip.addEventListener('pointerdown', (e: PointerEvent) => {
+    e.stopPropagation();
+    dragging = true;
+    chip!.setPointerCapture(e.pointerId);
+    chip!.style.cursor = 'grabbing';
+    const rect = chip!.getBoundingClientRect();
+    ox = e.clientX - rect.left;
+    oy = e.clientY - rect.top;
+  });
+
+  chip.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!dragging) return;
+    e.stopPropagation();
+    const newTop  = clampChipY(e.clientY - oy);
+    const newLeft = clampChipLeft(e.clientX - ox);
+    chip!.style.top   = `${newTop}px`;
+    chip!.style.left  = `${newLeft}px`;
+    chip!.style.right = 'auto';
+  });
+
+  chip.addEventListener('pointerup', (e: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    chip!.style.cursor = 'grab';
+    const top  = parseFloat(chip!.style.top);
+    const left = parseFloat(chip!.style.left);
+    chrome.storage.local.set({ [CHIP_POS_KEY]: { top, left } });
+  });
+
+  return chip;
+}
+
+function renderCoachChip(): void {
+  const chip = document.getElementById(COACH_CHIP_ID);
+  if (!chip) return;
+  const dot = document.getElementById('athena-coach-dot') as HTMLElement | null;
+  const label = document.getElementById('athena-coach-label') as HTMLElement | null;
+  if (!dot || !label) return;
+
+  const { phase, phaseStartedAt } = coachChipState;
+
+  if (phase === 'off') {
+    chip.style.display = 'none';
+    return;
+  }
+
+  chip.style.display = 'flex';
+  const elapsed = ((Date.now() - phaseStartedAt) / 1000).toFixed(1);
+
+  switch (phase) {
+    case 'listening':
+      dot.style.cssText =
+        'width:8px;height:8px;border-radius:999px;flex-shrink:0;background:#60A5FA;box-shadow:0 0 6px rgba(96,165,250,0.6);animation:athena-coach-pulse-slow 1.6s ease-in-out infinite';
+      label.textContent = 'Coach listening';
+      break;
+    case 'thinking':
+      dot.style.cssText =
+        'width:8px;height:8px;border-radius:999px;flex-shrink:0;background:#FBBF24;box-shadow:0 0 6px rgba(251,191,36,0.6);animation:athena-coach-pulse-slow 1.2s ease-in-out infinite';
+      label.textContent = 'Coach thinking…';
+      break;
+    case 'drafting':
+      dot.style.cssText =
+        'width:8px;height:8px;border-radius:999px;flex-shrink:0;background:#FBBF24;box-shadow:0 0 8px rgba(251,191,36,0.7);animation:athena-coach-pulse-fast 0.7s ease-in-out infinite';
+      label.textContent = `Coach drafting · ${elapsed}s`;
+      break;
+    case 'delivered':
+      dot.style.cssText =
+        'width:8px;height:8px;border-radius:999px;flex-shrink:0;background:#34D399;box-shadow:0 0 8px rgba(52,211,153,0.7)';
+      label.textContent = '✓ Delivered';
+      break;
+  }
+}
+
+function updateCoachChip(phase: CoachPhase): void {
+  coachChipState.phase = phase;
+  coachChipState.phaseStartedAt = Date.now();
+  ensureCoachChip();
+  renderCoachChip();
+  if (coachChipTick === null) {
+    coachChipTick = window.setInterval(() => {
+      // Auto-expire thinking state if no streaming frame arrives (urgency-gate miss).
+      if (
+        coachChipState.phase === 'thinking' &&
+        Date.now() - coachChipState.phaseStartedAt > THINK_TIMEOUT_MS
+      ) {
+        coachChipState.phase = 'listening';
+        coachChipState.phaseStartedAt = Date.now();
+      }
+      renderCoachChip();
+    }, 1000);
+  }
+}
 
 // ─── Caption observer ──────────────────────────────────────────────────────
 //

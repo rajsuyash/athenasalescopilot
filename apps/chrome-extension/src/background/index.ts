@@ -1077,6 +1077,59 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
 });
 
 /**
+ * Forward customer-side STT finalizations into the side panel's live status
+ * block. Same routing pattern as suggestion.streaming.forward — the
+ * offscreen WS receives `transcript.final` with `speaker === 'customer'`,
+ * the SW broadcasts `overlay.transcript.customer` to the active Meet tab,
+ * and the content script wires it into the panel's status pill.
+ *
+ * Length-capped at MAX_SUGGESTION_FIELD_LEN so a malformed STT segment
+ * can't pile unbounded text into the panel DOM.
+ */
+const MAX_TRANSCRIPT_TEXT_LEN = 600;
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (!isPrivilegedSender(sender)) return;
+  const msg = raw as { type?: string; text?: string };
+  if (msg?.type !== 'transcript.customer.forward') return;
+  const text = typeof msg.text === 'string' ? msg.text.slice(0, MAX_TRANSCRIPT_TEXT_LEN) : null;
+  if (!text || text.trim().length === 0) return;
+  void (async () => {
+    const active = await getActive();
+    const payload = { type: 'overlay.transcript.customer', text };
+    if (active && active.tabId >= 0) {
+      try {
+        await chrome.tabs.sendMessage(active.tabId, payload, { frameId: 0 });
+        return;
+      } catch {
+        try {
+          await chrome.tabs.sendMessage(active.tabId, payload);
+          return;
+        } catch {
+          /* fallthrough to broadcast */
+        }
+      }
+    }
+    try {
+      const tabs = await chrome.tabs.query({ url: 'https://meet.google.com/*' });
+      for (const t of tabs) {
+        if (typeof t.id !== 'number') continue;
+        try {
+          await chrome.tabs.sendMessage(t.id, payload, { frameId: 0 });
+        } catch {
+          try {
+            await chrome.tabs.sendMessage(t.id, payload);
+          } catch {
+            /* skip */
+          }
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+  })();
+});
+
+/**
  * Build the popup-facing view of state. Tokens are intentionally OMITTED —
  * even though only privileged senders reach this handler, the principle is
  * that the popup has no business knowing the raw bearer token. signedFetch

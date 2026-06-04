@@ -29,11 +29,29 @@ const STORAGE_PREFIX = 'panel.suggestions.';
 
 type Filter = 'all' | 'ask_next' | 'answer' | 'coach' | 'risk';
 
+interface LiveStatus {
+  /** Whether the rep has live capture running right now. Drives the
+   *  off-vs-listening base state. */
+  capturing: boolean;
+  /** Most recent customer-side STT finalization. When `null`, we've never
+   *  heard the customer in this session. */
+  lastCustomerTurn: { text: string; at: number } | null;
+  /** Coach's in-progress streamed answer (replaced on every token delta).
+   *  Cleared when the final `suggestion.generated` lands. */
+  draftingAnswer: string | null;
+  draftingFollowup: string | null;
+  draftingStartedAt: number | null;
+  /** When the last fully-formed suggestion was committed. Drives the
+   *  "Delivered ✓" flash before fading back to idle. */
+  lastDeliveredAt: number | null;
+}
+
 interface PanelState {
   meetingId: string | null;
   history: PanelSuggestion[];
   filter: Filter;
   open: boolean;
+  live: LiveStatus;
 }
 
 const state: PanelState = {
@@ -41,12 +59,22 @@ const state: PanelState = {
   history: [],
   filter: 'all',
   open: false,
+  live: {
+    capturing: false,
+    lastCustomerTurn: null,
+    draftingAnswer: null,
+    draftingFollowup: null,
+    draftingStartedAt: null,
+    lastDeliveredAt: null,
+  },
 };
 
 let shadow: ShadowRoot | null = null;
 let listEl: HTMLDivElement | null = null;
 let badgeEl: HTMLSpanElement | null = null;
 let panelEl: HTMLDivElement | null = null;
+let liveEl: HTMLDivElement | null = null;
+let liveTickInterval: number | null = null;
 
 function storageKey(meetingId: string): string {
   return `${STORAGE_PREFIX}${meetingId}`;
@@ -164,6 +192,73 @@ function buildTree(root: ShadowRoot): void {
     }
     .card .answer { color: #F8FAFC; margin-bottom: 6px; line-height: 1.5; font-weight: 500; font-size: 16px; }
     .card .followup { color: #F8FAFC; margin-bottom: 4px; line-height: 1.5; font-weight: 500; font-size: 16px; }
+    /* Live coach status block — sits between filters and the history list so
+     * the rep can see in real time what the coach is doing (listening,
+     * thinking, drafting) instead of staring at a static history while
+     * wondering if the engine is alive. */
+    .live {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .live .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      align-self: flex-start;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font: 600 11px Inter, -apple-system, system-ui, sans-serif;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: rgba(248,250,252,0.78);
+      transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
+    }
+    .live .pill .dot {
+      width: 6px; height: 6px; border-radius: 999px;
+      background: rgba(248,250,252,0.55);
+    }
+    .live .pill.listening { color: #93C5FD; border-color: rgba(147,197,253,0.35); }
+    .live .pill.listening .dot { background: #60A5FA; animation: pulse-dot 1.6s ease-in-out infinite; }
+    .live .pill.heard { color: #FBBF24; border-color: rgba(251,191,36,0.35); }
+    .live .pill.heard .dot { background: #FBBF24; }
+    .live .pill.drafting { color: #FBBF24; border-color: rgba(251,191,36,0.35); }
+    .live .pill.drafting .dot { background: #FBBF24; animation: pulse-dot 0.8s ease-in-out infinite; }
+    .live .pill.delivered { color: #34D399; border-color: rgba(52,211,153,0.35); }
+    .live .pill.delivered .dot { background: #34D399; }
+    .live .pill.off { color: rgba(248,250,252,0.55); }
+    .live .pill.off .dot { background: rgba(248,250,252,0.40); }
+    .live .customer-turn {
+      color: rgba(248,250,252,0.82);
+      font-size: 13px; line-height: 1.45;
+      max-height: 4.4em; overflow: hidden;
+    }
+    .live .customer-turn .label {
+      display: block;
+      font: 600 10px Inter, -apple-system, system-ui, sans-serif;
+      letter-spacing: 0.6px; text-transform: uppercase;
+      color: rgba(248,250,252,0.45);
+      margin-bottom: 3px;
+    }
+    .live .draft {
+      color: #F8FAFC;
+      font-size: 14px; line-height: 1.5;
+      font-weight: 500;
+      max-height: 6em; overflow: hidden;
+      padding-left: 8px;
+      border-left: 2px solid rgba(251,191,36,0.55);
+    }
+    .live .draft .label {
+      display: block;
+      font: 600 10px Inter, -apple-system, system-ui, sans-serif;
+      letter-spacing: 0.6px; text-transform: uppercase;
+      color: rgba(251,191,36,0.85);
+      margin-bottom: 3px;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.45; transform: scale(0.85); }
+    }
     .footer {
       padding: 10px 14px; border-top: 1px solid rgba(255,255,255,0.08);
       font-size: 11px; color: rgba(248,250,252,0.55); text-align: center;
@@ -228,6 +323,10 @@ function buildTree(root: ShadowRoot): void {
     filters.appendChild(chip);
   }
   panelEl.appendChild(filters);
+
+  liveEl = document.createElement('div');
+  liveEl.className = 'live';
+  panelEl.appendChild(liveEl);
 
   listEl = document.createElement('div');
   listEl.className = 'list';
@@ -363,7 +462,9 @@ async function hydrate(meetingId: string): Promise<void> {
     state.history = [];
   }
   ensureHost();
+  startLiveTick();
   render();
+  renderLive();
 }
 
 /** Add a fresh suggestion to the panel. Called whenever the SW relays an
@@ -372,8 +473,123 @@ export function add(s: PanelSuggestion): void {
   ensureHost();
   const enriched: PanelSuggestion = { ...s, receivedAt: Date.now() };
   state.history = [enriched, ...state.history].slice(0, MAX_HISTORY);
+  state.live.lastDeliveredAt = Date.now();
+  // Final suggestion landed — clear the in-flight draft.
+  state.live.draftingAnswer = null;
+  state.live.draftingFollowup = null;
+  state.live.draftingStartedAt = null;
   render();
+  renderLive();
   void persist();
+}
+
+/** Latest customer-side STT finalization. Drives the "heard customer →
+ *  thinking" transition in the live status block. */
+export function setCustomerTurn(text: string): void {
+  ensureHost();
+  state.live.lastCustomerTurn = { text: text.trim(), at: Date.now() };
+  renderLive();
+}
+
+/** Streaming tokens from the coach — replaced on every delta. */
+export function setDraft(answerText: string | null, followupText: string | null): void {
+  ensureHost();
+  state.live.draftingAnswer = answerText && answerText.trim().length > 0 ? answerText : null;
+  state.live.draftingFollowup =
+    followupText && followupText.trim().length > 0 ? followupText : null;
+  if (state.live.draftingStartedAt === null && (state.live.draftingAnswer || state.live.draftingFollowup)) {
+    state.live.draftingStartedAt = Date.now();
+  }
+  renderLive();
+}
+
+/** Capture lifecycle — driven by `chrome.storage.local.capture` changes
+ *  observed in the content script. */
+export function setCapturing(on: boolean): void {
+  ensureHost();
+  state.live.capturing = on;
+  if (!on) {
+    // Don't wipe lastCustomerTurn — the rep may want to read the last
+    // thing they said even after capture stops. But the in-flight draft
+    // is no longer truthful once the WS is closed.
+    state.live.draftingAnswer = null;
+    state.live.draftingFollowup = null;
+    state.live.draftingStartedAt = null;
+  }
+  renderLive();
+}
+
+interface LivePillState {
+  cls: 'off' | 'listening' | 'heard' | 'drafting' | 'delivered';
+  label: string;
+}
+
+function derivePill(now: number): LivePillState {
+  const l = state.live;
+  if (!l.capturing) return { cls: 'off', label: 'Capture off' };
+  if (l.draftingAnswer || l.draftingFollowup) {
+    const elapsed = l.draftingStartedAt ? Math.round((now - l.draftingStartedAt) / 100) / 10 : 0;
+    return { cls: 'drafting', label: `Drafting reply · ${elapsed.toFixed(1)}s` };
+  }
+  if (l.lastDeliveredAt && now - l.lastDeliveredAt < 2500) {
+    return { cls: 'delivered', label: 'Delivered ✓' };
+  }
+  if (l.lastCustomerTurn && now - l.lastCustomerTurn.at < 2500) {
+    return { cls: 'heard', label: 'Heard customer — thinking…' };
+  }
+  if (l.lastCustomerTurn && now - l.lastCustomerTurn.at < 30_000) {
+    return { cls: 'listening', label: 'Listening for next turn…' };
+  }
+  return { cls: 'listening', label: 'Listening…' };
+}
+
+function renderLive(): void {
+  if (!liveEl) return;
+  const now = Date.now();
+  const pill = derivePill(now);
+  liveEl.replaceChildren();
+
+  const pillEl = document.createElement('div');
+  pillEl.className = `pill ${pill.cls}`;
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+  pillEl.appendChild(dot);
+  pillEl.appendChild(document.createTextNode(pill.label));
+  liveEl.appendChild(pillEl);
+
+  if (state.live.lastCustomerTurn) {
+    const turn = document.createElement('div');
+    turn.className = 'customer-turn';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = `Customer · ${fmtAgo(state.live.lastCustomerTurn.at)}`;
+    turn.appendChild(label);
+    turn.appendChild(document.createTextNode(state.live.lastCustomerTurn.text));
+    liveEl.appendChild(turn);
+  }
+
+  const draftText =
+    state.live.draftingAnswer && state.live.draftingFollowup
+      ? `${state.live.draftingAnswer}\n${state.live.draftingFollowup}`
+      : state.live.draftingAnswer ?? state.live.draftingFollowup;
+  if (draftText) {
+    const draft = document.createElement('div');
+    draft.className = 'draft';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = 'Coach drafting';
+    draft.appendChild(label);
+    draft.appendChild(document.createTextNode(draftText));
+    liveEl.appendChild(draft);
+  }
+}
+
+function startLiveTick(): void {
+  if (liveTickInterval !== null) return;
+  // 1Hz tick refreshes pill state + "Xs ago" timestamps so transitions
+  // (heard → thinking → listening → idle) play out even when no new
+  // WS frames are arriving. Visible only while the panel is mounted.
+  liveTickInterval = window.setInterval(() => renderLive(), 1000);
 }
 
 /** Bind the panel to the active meeting. Call when the content script

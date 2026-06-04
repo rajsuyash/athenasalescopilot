@@ -224,6 +224,10 @@ function openSocket(): void {
       answerText?: string | null;
       followupText?: string | null;
       segment?: { text?: string; speakerLabel?: string };
+      // The gateway tags every transcript.final with the diarized speaker
+      // classification — rep / customer / unknown. We forward only
+      // customer-side turns into the live status panel (see SW handler).
+      speaker?: 'rep' | 'customer' | 'unknown';
     };
     try {
       payload = JSON.parse(text);
@@ -258,6 +262,24 @@ function openSocket(): void {
       case 'transcript.final':
         active.finalsHeard += 1;
         reportUpdate({ finalsHeard: active.finalsHeard });
+        // Forward customer-side finalizations to the SW so it can broadcast
+        // them into the side-panel's "Live coach" status block. The rep
+        // wants to see WHAT the coach is reacting to — without this, the
+        // panel only shows the coach's output, not its input.
+        // Filter: only customer turns (skip rep + unknown to keep the
+        // panel signal-dense). Drop empty/whitespace-only finalizations.
+        if (payload.speaker === 'customer') {
+          const txt = (payload.segment?.text ?? '').trim();
+          if (txt) {
+            void chrome.runtime
+              .sendMessage({
+                type: 'transcript.customer.forward',
+                text: txt,
+                at: Date.now(),
+              })
+              .catch(() => undefined);
+          }
+        }
         break;
       case 'suggestion.generated':
         active.suggestionsHeard += 1;
