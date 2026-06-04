@@ -21,10 +21,10 @@ cd "$(dirname "$0")/.."
 # Files permitted to still reference the literals / import the JWT libs while
 # their service is mid-migration. SHRINK this as each PR migrates a service.
 LEGACY_ALLOWLIST=(
-  # Migrated to @athena/auth: analytics, billing, knowledge, orchestrator,
-  # retention-worker, postcall (PR-D/E), realtime-gateway (PR-F).
-  # Still pending — migrates in PR-H (api keeps Clerk via the preVerify hook):
-  "services/api/src/plugins/auth.ts"
+  # EMPTY — every service now imports @athena/auth (PR-D/E migrated 6, PR-F the
+  # gateway, PR-H the api via the Clerk preVerify hook). The guard is fully
+  # fail-closed: any reintroduced JWT classification or per-service auth file
+  # now fails the build.
 )
 
 # Files that are ALWAYS allowed (the single source of truth + this script).
@@ -38,7 +38,8 @@ is_allowed() {
   for a in "${ALWAYS_ALLOWED[@]}"; do
     case "$file" in "$a"*) return 0 ;; esac
   done
-  for a in "${LEGACY_ALLOWLIST[@]}"; do
+  # Guard the expansion: `set -u` + an empty array errors on bash 3.2 (macOS).
+  for a in ${LEGACY_ALLOWLIST[@]+"${LEGACY_ALLOWLIST[@]}"}; do
     [ "$file" = "$a" ] && return 0
   done
   return 1
@@ -63,11 +64,14 @@ while IFS= read -r file; do
   violations=1
 done < <(git grep -l -E "from '(@fastify/jwt|fast-jwt)'|require\('(@fastify/jwt|fast-jwt)'\)" -- '*.ts' 2>/dev/null || true)
 
-# 3. A new services/**/src/{lib,plugins}/auth.ts that isn't allow-listed.
+# 3. A per-service auth file that ROLLS ITS OWN — i.e. does not import
+#    @athena/auth. A thin adapter that imports the shared package (e.g. the api's
+#    Clerk preVerify wrapper) is fine; rolling a bespoke verifier is not.
 while IFS= read -r file; do
   [ -z "$file" ] && continue
   if is_allowed "$file"; then continue; fi
-  echo "ROGUE AUTH: new per-service auth file $file — services must import @athena/auth, not roll their own."
+  if grep -q "@athena/auth" "$file" 2>/dev/null; then continue; fi
+  echo "ROGUE AUTH: per-service auth file $file does not import @athena/auth — don't roll your own."
   violations=1
 done < <(git ls-files 'services/*/src/lib/auth.ts' 'services/*/src/plugins/auth.ts' 2>/dev/null || true)
 
@@ -76,4 +80,4 @@ if [ "$violations" -ne 0 ]; then
   echo "Auth classification must live ONLY in @athena/auth. See docs/incidents/2026-06-04-token-expired-meeting-start.md"
   exit 1
 fi
-echo "check-no-rogue-auth: OK ($(( ${#LEGACY_ALLOWLIST[@]} )) legacy file(s) still pending migration)"
+echo "check-no-rogue-auth: OK (fully fail-closed — every service imports @athena/auth)"

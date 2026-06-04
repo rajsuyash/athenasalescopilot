@@ -1,3 +1,8 @@
+/// <reference types="@fastify/jwt" />
+// ^ Types-only reference that brings in the `app.jwt` augmentation for token
+//   *issuance* below. The plugin is registered by @athena/auth (the single
+//   owner of the JWT library); this is not a runtime import, so the
+//   no-rogue-auth tripwire stays satisfied.
 import crypto from 'node:crypto';
 import argon2 from 'argon2';
 import type { FastifyInstance } from 'fastify';
