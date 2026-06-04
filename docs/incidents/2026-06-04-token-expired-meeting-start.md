@@ -115,12 +115,12 @@ defects compound:
   branch so `AuthError` serializes byte-identically; expired/malformed contract tests added.
   **Tripwire allow-list now EMPTY — fully fail-closed. 8/8 services share one auth impl.**
 
-  --- REMAINING ---
+- ✅ **PR-G** — SHIPPED `da6fbb2` (ext 0.1.19). offscreen: WS close `4011` → fast-path
+  refresh+reconnect; reconnect no longer signs out on a TRANSIENT refresh failure (only
+  on `signed_out`); popup `account.state` now derives the three-state `AuthState`.
 
-- ⬜ **PR-G** — client WS (offscreen: 4011 fast-path + don't infinite-refresh on
-  TOKEN_INVALID using the error-frame code) + UI three-state via `deriveAuthState`
-  (already built+tested in `auth-logic.ts`). Client-side polish; NOT incident-critical
-  (deployed PR-A client already recovers from expiry via its any-non-1000-close refresh).
+  --- REMAINING (only the deferred refresh-route hardening) ---
+
 - ⬜ **DEFERRED: refresh-route hardening** (was PR-H's second half). Two pieces, both
   defense-in-depth that the PR-A client fix already substantially covers, so neither was
   shipped to avoid refactoring live token issuance + migrating the schema in a long session:
