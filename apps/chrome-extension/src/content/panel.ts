@@ -26,6 +26,12 @@ export interface PanelSuggestion {
 const HOST_ID = 'athena-panel-host';
 const MAX_HISTORY = 50;
 const STORAGE_PREFIX = 'panel.suggestions.';
+const BTN_POS_KEY = 'panel.btn.pos';
+// Movement past this many px during a press = drag, not a click.
+const DRAG_THRESHOLD = 5;
+
+const clampBtnTop = (v: number) => Math.min(Math.max(v, 8), window.innerHeight - 48);
+const clampBtnLeft = (v: number) => Math.min(Math.max(v, 8), window.innerWidth - 100);
 
 type Filter = 'all' | 'ask_next' | 'answer' | 'coach' | 'risk';
 
@@ -114,7 +120,8 @@ function buildTree(root: ShadowRoot): void {
       border-radius: 999px; padding: 10px 14px;
       font: 600 13px Inter, -apple-system, system-ui, sans-serif;
       letter-spacing: 0.2px;
-      cursor: pointer;
+      cursor: grab;
+      touch-action: none;
       box-shadow: 0 12px 40px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
       text-shadow: 0 1px 2px rgba(0,0,0,0.4);
       display: flex; align-items: center; gap: 8px;
@@ -286,7 +293,72 @@ function buildTree(root: ShadowRoot): void {
   badgeEl.textContent = '0';
   btn.appendChild(btnLabel);
   btn.appendChild(badgeEl);
-  btn.addEventListener('click', () => toggle());
+
+  // Drag-to-reposition. The same button both opens the panel (click) and
+  // moves (drag). A movement threshold distinguishes the two: if the pointer
+  // travels past DRAG_THRESHOLD the gesture is a drag and the click that
+  // fires on pointerup is suppressed so the panel doesn't toggle.
+  let dragging = false;
+  let moved = false;
+  let startX = 0;
+  let startY = 0;
+  let ox = 0;
+  let oy = 0;
+
+  // Restore saved position (async). Defaults to the CSS bottom:24px/right:24px
+  // until resolved.
+  chrome.storage.local.get([BTN_POS_KEY], (res) => {
+    const pos = res[BTN_POS_KEY] as { top: number; left: number } | undefined;
+    if (!pos) return;
+    btn.style.top = `${clampBtnTop(pos.top)}px`;
+    btn.style.left = `${clampBtnLeft(pos.left)}px`;
+    btn.style.bottom = 'auto';
+    btn.style.right = 'auto';
+  });
+
+  btn.addEventListener('pointerdown', (e: PointerEvent) => {
+    dragging = true;
+    moved = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = btn.getBoundingClientRect();
+    ox = e.clientX - rect.left;
+    oy = e.clientY - rect.top;
+    btn.setPointerCapture(e.pointerId);
+  });
+
+  btn.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!dragging) return;
+    if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD) {
+      return;
+    }
+    moved = true;
+    btn.style.cursor = 'grabbing';
+    btn.style.top = `${clampBtnTop(e.clientY - oy)}px`;
+    btn.style.left = `${clampBtnLeft(e.clientX - ox)}px`;
+    btn.style.bottom = 'auto';
+    btn.style.right = 'auto';
+  });
+
+  btn.addEventListener('pointerup', () => {
+    if (!dragging) return;
+    dragging = false;
+    btn.style.cursor = 'grab';
+    if (moved) {
+      const top = parseFloat(btn.style.top);
+      const left = parseFloat(btn.style.left);
+      chrome.storage.local.set({ [BTN_POS_KEY]: { top, left } });
+    }
+  });
+
+  btn.addEventListener('click', () => {
+    // Drag just ended on this button — swallow the click so it doesn't toggle.
+    if (moved) {
+      moved = false;
+      return;
+    }
+    toggle();
+  });
   root.appendChild(btn);
 
   panelEl = document.createElement('div');
