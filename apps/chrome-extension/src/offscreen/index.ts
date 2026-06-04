@@ -159,7 +159,9 @@ async function start(req: StartMsg): Promise<void> {
     reconnectAttempt: null,
   };
 
-  node.port.onmessage = (ev: MessageEvent<ArrayBuffer | { kind: string; peak?: number; inputRate?: number }>) => {
+  node.port.onmessage = (
+    ev: MessageEvent<ArrayBuffer | { kind: string; peak?: number; inputRate?: number }>,
+  ) => {
     if (!active) return;
     if (!(ev.data instanceof ArrayBuffer)) return;
     if (!active.ready || active.ws.readyState !== WebSocket.OPEN) return;
@@ -323,9 +325,10 @@ function openSocket(): void {
       reportUpdate({ closed: true, lastError: null });
       return;
     }
-    // 4001 = gateway rejected the access token. Skip backoff for the first
-    // attempt so we refresh + retry immediately.
-    const isAuthFail = ev.code === 4001;
+    // Auth-failure closes: 4001 = token invalid, 4011 = token expired (the
+    // gateway's refreshable signal, PR-F). Both skip backoff so we refresh +
+    // reconnect immediately. Any other close code backs off normally.
+    const isAuthFail = ev.code === 4001 || ev.code === 4011;
     void scheduleReconnect(`ws_closed_${ev.code}`, isAuthFail);
   });
 }
@@ -340,9 +343,7 @@ async function scheduleReconnect(reason: string, fastPath = false): Promise<void
   }
   active.reconnectAttempt = attempt;
   reportUpdate({ reconnectAttempt: attempt, lastError: `reconnecting (attempt ${attempt})` });
-  const delay = fastPath
-    ? 0
-    : BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)] ?? 16_000;
+  const delay = fastPath ? 0 : (BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)] ?? 16_000);
   if (delay > 0) await new Promise((res) => setTimeout(res, delay));
   if (!active) return;
   try {
@@ -351,11 +352,22 @@ async function scheduleReconnect(reason: string, fastPath = false): Promise<void
       | { ok: false; error?: string };
     if (r?.ok && r.accessToken) {
       active.accessToken = r.accessToken;
-    } else {
-      log.warn('[athena-offscreen] refreshToken failed');
-      reportUpdate({ closed: true, lastError: `auth expired — sign in again`, reconnectAttempt: null });
+    } else if (r && !r.ok && r.error === 'signed_out') {
+      // The refresh token was REJECTED (401/403) → the session is genuinely
+      // over. Stop and tell the user to sign in again.
+      log.warn('[athena-offscreen] refreshToken: signed out');
+      reportUpdate({
+        closed: true,
+        lastError: `auth expired — sign in again`,
+        reconnectAttempt: null,
+      });
       await stop('auth_expired');
       return;
+    } else {
+      // Transient refresh failure (5xx/429/network) — do NOT sign the user out
+      // on a blip. Keep the session and reconnect with the existing token; if it
+      // keeps failing, the bounded backoff loop eventually gives up on its own.
+      log.warn('[athena-offscreen] refreshToken: transient failure, retrying');
     }
   } catch {
     log.warn('[athena-offscreen] refreshToken errored');

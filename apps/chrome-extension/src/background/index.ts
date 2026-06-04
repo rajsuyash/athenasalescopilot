@@ -20,7 +20,7 @@ import {
   type RuntimeMessage,
 } from '../shared/types.js';
 import { log } from '../shared/log.js';
-import { needsRefresh, classifyRefreshHttpFailure } from './auth-logic.js';
+import { needsRefresh, classifyRefreshHttpFailure, deriveAuthState } from './auth-logic.js';
 
 /**
  * Trust boundary: any chrome.runtime.onMessage handler is reachable by
@@ -1200,8 +1200,18 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
  * lives entirely in the SW.
  */
 function buildPopupQueryResponse(state: PersistedState): PopupQueryResponse {
+  // Validity-aware: 'refreshable' (access expired but refresh token present)
+  // still presents as signed-in — the background refreshes silently. Only
+  // 'signed-out' (no/dead refresh token) shows the login surface.
+  const authState = deriveAuthState({
+    accessToken: state.settings.accessToken,
+    refreshToken: state.settings.refreshToken,
+    expiresAt: state.settings.expiresAt,
+    now: Date.now(),
+  });
   const account: AccountInfo = {
-    isSignedIn: !!state.settings.accessToken,
+    isSignedIn: authState !== 'signed-out',
+    state: authState,
     email: state.settings.userEmail,
     expiresAt: state.settings.expiresAt,
   };
