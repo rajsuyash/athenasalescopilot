@@ -4,7 +4,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { createEmbeddingClient } from '@athena/sdk-embeddings';
 import { createLlmClient } from '@athena/sdk-llm';
 import { loadEnv } from './config/env.js';
-import { authPlugin } from './lib/auth.js';
+import { authPlugin } from '@athena/auth';
 import { errorHandlerPlugin } from './lib/error-handler.js';
 import { suggestRoutes } from './modules/suggest/routes.js';
 
@@ -33,15 +33,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     deterministicDimension: env.EMBEDDING_DIMENSION,
   });
 
-  const llm = env.LLM_PROVIDER === 'mock'
-    ? createLlmClient({ provider: 'mock' })
-    : env.ANTHROPIC_API_KEY
-      ? createLlmClient({
-          provider: 'anthropic',
-          anthropicApiKey: env.ANTHROPIC_API_KEY,
-          anthropicModel: env.ANTHROPIC_MODEL,
-        })
-      : null;
+  const llm =
+    env.LLM_PROVIDER === 'mock'
+      ? createLlmClient({ provider: 'mock' })
+      : env.ANTHROPIC_API_KEY
+        ? createLlmClient({
+            provider: 'anthropic',
+            anthropicApiKey: env.ANTHROPIC_API_KEY,
+            anthropicModel: env.ANTHROPIC_MODEL,
+          })
+        : null;
 
   app.get('/healthz', async () => ({ ok: true, llm: !!llm }));
 
@@ -75,5 +76,13 @@ async function main() {
   }
 }
 
-import { realpathSync } from "node:fs"; import { fileURLToPath } from "node:url"; const isMain = (() => { try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? ""); } catch { return false; } })();
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+const isMain = (() => {
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? '');
+  } catch {
+    return false;
+  }
+})();
 if (isMain) void main();

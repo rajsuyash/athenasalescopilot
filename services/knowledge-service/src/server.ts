@@ -6,7 +6,7 @@ import { createEmbeddingClient } from '@athena/sdk-embeddings';
 import { createLlmClient, initSkills } from '@athena/sdk-llm';
 import { dir as skillsDir } from '@athena/skills';
 import { loadEnv } from './config/env.js';
-import { authPlugin } from './lib/auth.js';
+import { authPlugin } from '@athena/auth';
 import { errorHandlerPlugin } from './lib/error-handler.js';
 import { ingestRoutes } from './modules/ingest/routes.js';
 import { retrievalRoutes } from './modules/retrieval/routes.js';
@@ -93,5 +93,13 @@ async function main() {
   }
 }
 
-import { realpathSync } from "node:fs"; import { fileURLToPath } from "node:url"; const isMain = (() => { try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? ""); } catch { return false; } })();
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+const isMain = (() => {
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? '');
+  } catch {
+    return false;
+  }
+})();
 if (isMain) void main();

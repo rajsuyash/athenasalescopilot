@@ -3,7 +3,7 @@ import sensible from '@fastify/sensible';
 import Fastify, { type FastifyInstance } from 'fastify';
 import rawBody from 'fastify-raw-body';
 import { loadEnv } from './config/env.js';
-import { authPlugin } from './lib/auth.js';
+import { authPlugin } from '@athena/auth';
 import { errorHandlerPlugin } from './lib/error-handler.js';
 import { buildStripe } from './lib/stripe.js';
 import { billingRoutes } from './modules/billing/routes.js';
@@ -70,5 +70,13 @@ async function main(): Promise<void> {
   }
 }
 
-import { realpathSync } from "node:fs"; import { fileURLToPath } from "node:url"; const isMain = (() => { try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? ""); } catch { return false; } })();
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+const isMain = (() => {
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? '');
+  } catch {
+    return false;
+  }
+})();
 if (isMain) void main();

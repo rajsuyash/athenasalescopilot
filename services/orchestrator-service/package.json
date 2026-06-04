@@ -14,6 +14,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@athena/auth": "workspace:*",
     "@athena/db": "workspace:*",
     "@athena/policies": "workspace:*",
     "@athena/sdk-embeddings": "workspace:*",

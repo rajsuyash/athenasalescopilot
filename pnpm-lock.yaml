@@ -233,6 +233,9 @@ importers:
 
   services/analytics-service:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -349,6 +352,9 @@ importers:
 
   services/billing-service:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -401,6 +407,9 @@ importers:
 
   services/knowledge-service:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -465,6 +474,9 @@ importers:
 
   services/orchestrator-service:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -517,6 +529,9 @@ importers:
 
   services/postcall-service:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -633,6 +648,9 @@ importers:
 
   services/retention-worker:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db
