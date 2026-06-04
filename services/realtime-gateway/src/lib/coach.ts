@@ -39,17 +39,83 @@ const STAGE_SIGNALS = [
 type StageSignal = (typeof STAGE_SIGNALS)[number];
 
 const KEYWORDS: Record<Exclude<IntentCategory, 'none'>, RegExp[]> = {
-  pricing: [/\bprice\b/i, /\bpricing\b/i, /\bcost\b/i, /\bquote\b/i, /\bdiscount\b/i, /\bplan\b/i, /\bseat\b/i, /\bper user\b/i],
-  implementation: [/\bonboard/i, /\bimplement/i, /\bdeploy/i, /\brollout\b/i, /\bsetup\b/i, /\binstall/i],
-  security: [/\bsecurity\b/i, /\bsoc\s*2\b/i, /\bgdpr\b/i, /\bhipaa\b/i, /\bencrypt/i, /\bretention\b/i, /\bcompliance\b/i, /\bdata\s+(?:retention|privacy)\b/i],
-  integration: [/\bintegrat/i, /\bapi\b/i, /\bwebhook/i, /\bzapier\b/i, /\bsalesforce\b/i, /\bhubspot\b/i, /\bsso\b/i],
-  procurement: [/\bprocurement\b/i, /\blegal\b/i, /\bcontract\b/i, /\bmsa\b/i, /\bredline/i, /\bvendor\s+review\b/i],
-  competitor: [/\bvs\.?\b/i, /\bcompar/i, /\balternative\b/i, /\bcompetitor\b/i, /\binstead of\b/i, /\balready (?:have|use|using)\b/i, /\bhave a (?:vendor|solution|tool|system|platform)\b/i, /\busing (?:another|a different|an existing)\b/i],
-  timeline: [/\btimeline\b/i, /\bwhen can\b/i, /\bgo[- ]live\b/i, /\bschedule\b/i, /\bquarter\b/i, /\bdeadline\b/i],
-  authority: [/\bdecision[-\s]maker\b/i, /\bsign[-\s]off\b/i, /\bapprove\b/i, /\bwho\s+(?:owns|decides)\b/i],
+  pricing: [
+    /\bprice\b/i,
+    /\bpricing\b/i,
+    /\bcost\b/i,
+    /\bquote\b/i,
+    /\bdiscount\b/i,
+    /\bplan\b/i,
+    /\bseat\b/i,
+    /\bper user\b/i,
+  ],
+  implementation: [
+    /\bonboard/i,
+    /\bimplement/i,
+    /\bdeploy/i,
+    /\brollout\b/i,
+    /\bsetup\b/i,
+    /\binstall/i,
+  ],
+  security: [
+    /\bsecurity\b/i,
+    /\bsoc\s*2\b/i,
+    /\bgdpr\b/i,
+    /\bhipaa\b/i,
+    /\bencrypt/i,
+    /\bretention\b/i,
+    /\bcompliance\b/i,
+    /\bdata\s+(?:retention|privacy)\b/i,
+  ],
+  integration: [
+    /\bintegrat/i,
+    /\bapi\b/i,
+    /\bwebhook/i,
+    /\bzapier\b/i,
+    /\bsalesforce\b/i,
+    /\bhubspot\b/i,
+    /\bsso\b/i,
+  ],
+  procurement: [
+    /\bprocurement\b/i,
+    /\blegal\b/i,
+    /\bcontract\b/i,
+    /\bmsa\b/i,
+    /\bredline/i,
+    /\bvendor\s+review\b/i,
+  ],
+  competitor: [
+    /\bvs\.?\b/i,
+    /\bcompar/i,
+    /\balternative\b/i,
+    /\bcompetitor\b/i,
+    /\binstead of\b/i,
+    /\balready (?:have|use|using)\b/i,
+    /\bhave a (?:vendor|solution|tool|system|platform)\b/i,
+    /\busing (?:another|a different|an existing)\b/i,
+  ],
+  timeline: [
+    /\btimeline\b/i,
+    /\bwhen can\b/i,
+    /\bgo[- ]live\b/i,
+    /\bschedule\b/i,
+    /\bquarter\b/i,
+    /\bdeadline\b/i,
+  ],
+  authority: [
+    /\bdecision[-\s]maker\b/i,
+    /\bsign[-\s]off\b/i,
+    /\bapprove\b/i,
+    /\bwho\s+(?:owns|decides)\b/i,
+  ],
   budget: [/\bbudget\b/i, /\bspend\b/i, /\bfunded\b/i, /\bpo\b/i],
   next_steps: [/\bnext step/i, /\bfollow up\b/i, /\bsend over\b/i],
-  product_fit: [/\buse case\b/i, /\bworkflow\b/i, /\bteam size\b/i, /\bdoes (?:it|this) (?:work|support)/i],
+  product_fit: [
+    /\buse case\b/i,
+    /\bworkflow\b/i,
+    /\bteam size\b/i,
+    /\bdoes (?:it|this) (?:work|support)/i,
+  ],
   objection: [
     /\b(?:concern|worri|hesitat|skeptic)/i,
     /\btoo expensive\b/i,
@@ -73,7 +139,13 @@ const KEYWORDS: Record<Exclude<IntentCategory, 'none'>, RegExp[]> = {
     /\bbefore (?:i )?committ?ing\b/i,
     /\bcommit\b/i,
   ],
-  technical_validation: [/\bbenchmark/i, /\bperformance\b/i, /\blatency\b/i, /\bload test\b/i, /\bscale\b/i],
+  technical_validation: [
+    /\bbenchmark/i,
+    /\bperformance\b/i,
+    /\blatency\b/i,
+    /\bload test\b/i,
+    /\bscale\b/i,
+  ],
   feature_request: [/\bcan you (?:add|support)\b/i, /\bdoes it have\b/i, /\bfeature\b/i],
 };
 
@@ -163,23 +235,41 @@ interface RetrievedChunk {
 }
 
 function vectorLiteral(v: readonly number[]): string {
-  return `[${v.map((x) => {
-    if (!Number.isFinite(x)) throw new Error('non-finite vector');
-    return Number(x);
-  }).join(',')}]`;
+  return `[${v
+    .map((x) => {
+      if (!Number.isFinite(x)) throw new Error('non-finite vector');
+      return Number(x);
+    })
+    .join(',')}]`;
 }
 
-async function retrieve(
+/** Intent categories that should trigger the objection-first two-pass — kept in
+ *  sync with the orchestrator (OBJECTION_INTENT_CATEGORIES). When the prospect
+ *  turn looks like an objection, we want the seeded reframe library AND the
+ *  BMC-specific objection→solution matrix (both `objection-handling-*`) surfaced
+ *  even when their raw semantic score trails a generic FAQ chunk. */
+const OBJECTION_INTENT_CATEGORIES = new Set<IntentCategory>([
+  'objection',
+  'pricing',
+  'authority',
+  'budget',
+  'timeline',
+  'competitor',
+]);
+
+const OBJECTION_CATEGORY_PREFIX = 'objection-handling-';
+
+/** One hybrid (semantic + trigram) pass, optionally restricted to a document
+ *  category prefix. workspace_id is the FIRST predicate (F10). */
+async function retrievePass(
   workspaceId: string,
+  qVec: readonly number[],
   query: string,
-  embeddings: EmbeddingClient,
-  category: string | null,
   language: string | null,
-): Promise<RetrievedChunk[]> {
-  const { vectors } = await embeddings.embed({ workspaceId, texts: [query] });
-  const qVec = vectors[0];
-  if (!qVec) return [];
-  const rows = await prisma.$queryRawUnsafe<ChunkRow[]>(
+  categoryPrefix: string | null,
+  limit: number,
+): Promise<ChunkRow[]> {
+  return prisma.$queryRawUnsafe<ChunkRow[]>(
     `
     WITH semantic AS (
       SELECT kc.id, kc.chunk_text, kc.document_version_id, kc.language,
@@ -189,7 +279,7 @@ async function retrieve(
         AND kc.active = true
         AND ($3::text IS NULL OR kc.language = $3)
       ORDER BY kc.embedding <=> $1::vector
-      LIMIT 3
+      LIMIT 12
     ),
     keyword AS (
       SELECT kc.id, similarity(kc.chunk_text, $4::text) AS score
@@ -198,7 +288,7 @@ async function retrieve(
         AND kc.active = true
         AND kc.chunk_text % $4::text
       ORDER BY similarity(kc.chunk_text, $4::text) DESC
-      LIMIT 3
+      LIMIT 12
     ),
     combined AS (
       SELECT id, score FROM semantic
@@ -214,15 +304,53 @@ async function retrieve(
     JOIN knowledge_document_versions kdv ON kdv.id = kc.document_version_id
     JOIN knowledge_documents kd ON kd.id = kdv.document_id
     WHERE kc.workspace_id = $2::uuid
+      AND ($5::text IS NULL OR kd.category LIKE $5)
     ORDER BY a.score DESC
-    LIMIT 3
+    LIMIT $6
     `,
     vectorLiteral(qVec),
     workspaceId,
     language,
     query,
+    categoryPrefix ? `${categoryPrefix}%` : null,
+    limit,
   );
-  void category;
+}
+
+async function retrieve(
+  workspaceId: string,
+  query: string,
+  embeddings: EmbeddingClient,
+  categories: readonly IntentCategory[],
+  language: string | null,
+): Promise<RetrievedChunk[]> {
+  const { vectors } = await embeddings.embed({ workspaceId, texts: [query] });
+  const qVec = vectors[0];
+  if (!qVec) return [];
+
+  const objectionFirst = categories.some((c) => OBJECTION_INTENT_CATEGORIES.has(c));
+
+  let rows: ChunkRow[];
+  if (objectionFirst) {
+    // Pass 1: the reframe library + BMC objection matrix. Pass 2: unrestricted.
+    // Merge objection-first (dedup by id) so a pre-baked grounded reframe wins
+    // over a generic chunk even at a slightly lower score. Mirrors the
+    // orchestrator's two-pass.
+    const [objectionRows, generalRows] = await Promise.all([
+      retrievePass(workspaceId, qVec, query, language, OBJECTION_CATEGORY_PREFIX, 3),
+      retrievePass(workspaceId, qVec, query, language, null, 3),
+    ]);
+    const seen = new Set<string>();
+    rows = [];
+    for (const r of [...objectionRows, ...generalRows]) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      rows.push(r);
+    }
+  } else {
+    rows = await retrievePass(workspaceId, qVec, query, language, null, 3);
+  }
+
   const minScore = Number(process.env.RETRIEVAL_MIN_SCORE ?? 0.1);
   return rows
     .filter((r) => r.score >= (Number.isFinite(minScore) ? minScore : 0.1))
@@ -318,14 +446,14 @@ const STAGE_ALIASES: Record<string, string> = {
 };
 
 function normalizeStage(raw: string): string {
-  const s = raw.trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const s = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
   return STAGE_ALIASES[s] ?? s;
 }
 
-async function getActiveScriptForStage(
-  workspaceId: string,
-  stage: string,
-): Promise<string | null> {
+async function getActiveScriptForStage(workspaceId: string, stage: string): Promise<string | null> {
   const cached = scriptCache.get(workspaceId);
   if (!cached || Date.now() - cached.loadedAt > SCRIPT_TTL_MS) {
     try {
@@ -563,11 +691,7 @@ export async function proactiveCoach(
   // prompt the model occasionally regurgitates the same opener verbatim.
   // Also reject if the rep already spoke (a paraphrase of) the candidate.
   if (
-    isDuplicateOrSpoken(
-      r.parsed.followup_text,
-      input.recentSuggestions ?? [],
-      input.contextTurns,
-    )
+    isDuplicateOrSpoken(r.parsed.followup_text, input.recentSuggestions ?? [], input.contextTurns)
   ) {
     emitTotal(true);
     return null;
@@ -700,10 +824,7 @@ export interface CoachDeps {
 
 const POLICY_VERSION = 'policy-v1-gateway';
 
-export async function coachAndPersist(
-  input: CoachInput,
-  deps: CoachDeps,
-): Promise<CoachOutput> {
+export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promise<CoachOutput> {
   if (!input.workspaceId) throw new Error('workspaceId required');
   const tStart = Date.now();
   const intent = classifyHeuristic(input.customerText);
@@ -738,7 +859,7 @@ export async function coachAndPersist(
       input.workspaceId,
       input.customerText,
       deps.embeddings,
-      cat,
+      intent.categories,
       input.language ?? null,
     ),
     deps.llm
@@ -770,14 +891,20 @@ export async function coachAndPersist(
     const userPrompt = [
       `Customer turn:\n${input.customerText}`,
       input.contextTurns.length
-        ? `Context:\n${input.contextTurns.slice(-3).map((t) => `${t.speaker.toUpperCase()}: ${t.text}`).join('\n')}`
+        ? `Context:\n${input.contextTurns
+            .slice(-3)
+            .map((t) => `${t.speaker.toUpperCase()}: ${t.text}`)
+            .join('\n')}`
         : null,
       `Intent: categories=${intent.categories.join(',')} stage=${intent.stageSignal} urgency=${intent.urgencyScore.toFixed(2)}`,
       scriptBody
         ? `Workspace playbook for stage=${intent.stageSignal} (METHODOLOGY — internalize the pattern and adapt to the prospect's actual words; DO NOT quote verbatim; never cite as a chunk):\n${scriptBody}`
         : null,
       `Approved chunks (use the UUID after "CHUNK_ID:" in source_chunk_ids — never the bracket number):\n\n${chunks
-        .map((c, i) => `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text}`)
+        .map(
+          (c, i) =>
+            `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text}`,
+        )
         .join('\n\n')}`,
     ]
       .filter(Boolean)

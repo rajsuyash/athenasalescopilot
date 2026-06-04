@@ -17,21 +17,21 @@ datasource db {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model User {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email         String   @unique
-  name          String
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String   @unique
+  name         String
   /// Optional during the Block T migration window. After all users have a
   /// Clerk identity, drop passwordHash and make this NOT NULL.
-  clerkUserId   String?  @unique @map("clerk_user_id")
-  passwordHash  String?  @map("password_hash")
-  globalStatus  String   @default("active") @map("global_status")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  clerkUserId  String?  @unique @map("clerk_user_id")
+  passwordHash String?  @map("password_hash")
+  globalStatus String   @default("active") @map("global_status")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  memberships   UserWorkspaceMembership[]
-  hostedMeetings Meeting[]                @relation("MeetingHost")
-  auditLogs     AuditLog[]
-  feedback      SuggestionFeedback[]
+  memberships    UserWorkspaceMembership[]
+  hostedMeetings Meeting[]                 @relation("MeetingHost")
+  auditLogs      AuditLog[]
+  feedback       SuggestionFeedback[]
 
   @@map("users")
 }
@@ -50,19 +50,19 @@ model Workspace {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  memberships         UserWorkspaceMembership[]
-  teams               Team[]
-  meetings            Meeting[]
-  transcriptSegments  TranscriptSegment[]
-  suggestions         Suggestion[]
-  knowledgeDocuments  KnowledgeDocument[]
-  knowledgeChunks     KnowledgeChunk[]
-  scriptCollections   ScriptCollection[]
-  answerTemplates     AnswerTemplate[]
-  auditLogs           AuditLog[]
-  retentionPolicies   RetentionPolicy[]
-  invites             Invite[]
-  bmc                 WorkspaceBmc?
+  memberships        UserWorkspaceMembership[]
+  teams              Team[]
+  meetings           Meeting[]
+  transcriptSegments TranscriptSegment[]
+  suggestions        Suggestion[]
+  knowledgeDocuments KnowledgeDocument[]
+  knowledgeChunks    KnowledgeChunk[]
+  scriptCollections  ScriptCollection[]
+  answerTemplates    AnswerTemplate[]
+  auditLogs          AuditLog[]
+  retentionPolicies  RetentionPolicy[]
+  invites            Invite[]
+  bmc                WorkspaceBmc?
 
   @@map("workspaces")
 }
@@ -125,16 +125,16 @@ model Team {
 }
 
 model Invite {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId String   @map("workspace_id") @db.Uuid
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
   email       String
   role        String
-  teamId      String?  @map("team_id") @db.Uuid
-  invitedBy   String   @map("invited_by") @db.Uuid
-  tokenHash   String   @unique @map("token_hash")
-  expiresAt   DateTime @map("expires_at")
+  teamId      String?   @map("team_id") @db.Uuid
+  invitedBy   String    @map("invited_by") @db.Uuid
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
   acceptedAt  DateTime? @map("accepted_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
@@ -143,13 +143,13 @@ model Invite {
 }
 
 model RefreshToken {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String   @map("user_id") @db.Uuid
-  workspaceId String   @map("workspace_id") @db.Uuid
-  tokenHash   String   @unique @map("token_hash")
-  expiresAt   DateTime @map("expires_at")
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at")
   revokedAt   DateTime? @map("revoked_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   @@index([userId])
   @@index([workspaceId])
@@ -181,18 +181,18 @@ model ExtensionPairing {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Meeting {
-  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId        String    @map("workspace_id") @db.Uuid
-  hostUserId         String    @map("host_user_id") @db.Uuid
-  externalPlatform   String    @map("external_platform")
-  externalMeetingId  String    @map("external_meeting_id")
-  title              String?
-  startedAt          DateTime? @map("started_at")
-  endedAt            DateTime? @map("ended_at")
-  status             String    @default("ready")
-  consentMode        String    @default("rep_only") @map("consent_mode")
-  retentionPolicyId  String?   @map("retention_policy_id") @db.Uuid
-  createdAt          DateTime  @default(now()) @map("created_at")
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  hostUserId        String    @map("host_user_id") @db.Uuid
+  externalPlatform  String    @map("external_platform")
+  externalMeetingId String    @map("external_meeting_id")
+  title             String?
+  startedAt         DateTime? @map("started_at")
+  endedAt           DateTime? @map("ended_at")
+  status            String    @default("ready")
+  consentMode       String    @default("rep_only") @map("consent_mode")
+  retentionPolicyId String?   @map("retention_policy_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   host               User                @relation("MeetingHost", fields: [hostUserId], references: [id])
@@ -224,16 +224,16 @@ model MeetingSession {
 }
 
 model TranscriptSegment {
-  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId  String  @map("workspace_id") @db.Uuid
-  meetingId    String  @map("meeting_id") @db.Uuid
-  speakerType  String  @map("speaker_type")
-  speakerLabel String  @map("speaker_label")
+  id           String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String @map("workspace_id") @db.Uuid
+  meetingId    String @map("meeting_id") @db.Uuid
+  speakerType  String @map("speaker_type")
+  speakerLabel String @map("speaker_label")
   text         String
-  startMs      Int     @map("start_ms")
-  endMs        Int     @map("end_ms")
+  startMs      Int    @map("start_ms")
+  endMs        Int    @map("end_ms")
   confidence   Float
-  sourceType   String  @map("source_type")
+  sourceType   String @map("source_type")
   language     String
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -279,22 +279,22 @@ model IntentEvent {
 }
 
 model Suggestion {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId     String   @map("workspace_id") @db.Uuid
-  meetingId       String   @map("meeting_id") @db.Uuid
-  turnId          String   @map("turn_id") @db.Uuid
-  suggestionType  String   @map("suggestion_type")
-  answerText      String?  @map("answer_text")
-  followupText    String?  @map("followup_text")
-  confidenceScore Float    @map("confidence_score")
-  priorityScore   Float    @map("priority_score")
-  sourceChunkIds  String[] @map("source_chunk_ids") @db.Uuid
-  policyVersion   String   @map("policy_version")
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String    @map("workspace_id") @db.Uuid
+  meetingId       String    @map("meeting_id") @db.Uuid
+  turnId          String    @map("turn_id") @db.Uuid
+  suggestionType  String    @map("suggestion_type")
+  answerText      String?   @map("answer_text")
+  followupText    String?   @map("followup_text")
+  confidenceScore Float     @map("confidence_score")
+  priorityScore   Float     @map("priority_score")
+  sourceChunkIds  String[]  @map("source_chunk_ids") @db.Uuid
+  policyVersion   String    @map("policy_version")
   rationale       String?
-  generatedAt     DateTime @default(now()) @map("generated_at")
+  generatedAt     DateTime  @default(now()) @map("generated_at")
   displayedAt     DateTime? @map("displayed_at")
   dismissedAt     DateTime? @map("dismissed_at")
-  acceptedSignal  String?  @map("accepted_signal")
+  acceptedSignal  String?   @map("accepted_signal")
 
   workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   meeting   Meeting              @relation(fields: [meetingId], references: [id], onDelete: Cascade)
@@ -325,15 +325,15 @@ model SuggestionFeedback {
 /// Manager-applied flag on a suggestion. Used for the enablement review queue
 /// and call-coaching workflows. PRD F13.
 model SuggestionFlag {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId  String   @map("workspace_id") @db.Uuid
-  suggestionId String   @map("suggestion_id") @db.Uuid
-  flaggedBy    String   @map("flagged_by") @db.Uuid
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  suggestionId String    @map("suggestion_id") @db.Uuid
+  flaggedBy    String    @map("flagged_by") @db.Uuid
   /// risky | wrong | example | revisit
   reason       String
   notes        String?
   resolvedAt   DateTime? @map("resolved_at")
-  createdAt    DateTime @default(now()) @map("created_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   suggestion Suggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
 
@@ -377,11 +377,11 @@ model KnowledgeDocument {
 }
 
 model KnowledgeDocumentVersion {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  documentId   String   @map("document_id") @db.Uuid
-  version      Int
-  contentHash  String   @map("content_hash")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId  String   @map("document_id") @db.Uuid
+  version     Int
+  contentHash String   @map("content_hash")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
   chunks   KnowledgeChunk[]
@@ -393,15 +393,15 @@ model KnowledgeDocumentVersion {
 
 /// Vector dimension is set per embedding model; default 1536. See docs/decisions/0003-embedding-model.md (TBD).
 model KnowledgeChunk {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId       String   @map("workspace_id") @db.Uuid
-  documentVersionId String   @map("document_version_id") @db.Uuid
-  chunkText         String   @map("chunk_text")
-  chunkOrder        Int      @map("chunk_order")
-  tagsJson          Json     @map("tags_json")
-  visibilityScope   String   @default("workspace") @map("visibility_scope")
+  id                String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String                      @map("workspace_id") @db.Uuid
+  documentVersionId String                      @map("document_version_id") @db.Uuid
+  chunkText         String                      @map("chunk_text")
+  chunkOrder        Int                         @map("chunk_order")
+  tagsJson          Json                        @map("tags_json")
+  visibilityScope   String                      @default("workspace") @map("visibility_scope")
   language          String
-  active            Boolean  @default(true)
+  active            Boolean                     @default(true)
   // Embedding column managed by raw SQL (pgvector). MUST be declared as
   // Unsupported here so `prisma db push --accept-data-loss` does not drop it
   // when reconciling the schema (which would silently NULL all stored vectors
@@ -420,27 +420,34 @@ model ScriptCollection {
   workspaceId      String   @map("workspace_id") @db.Uuid
   name             String
   currentVersionId String?  @unique @map("current_version_id") @db.Uuid
+  // Proactive BMC pre-generation: a workspace has at most ONE auto-generated
+  // collection that is republished (new version, repointed currentVersionId)
+  // every time the BMC changes. sourceBmcVersion gates idempotency — skip a
+  // regen if the auto-collection was already built for this WorkspaceBmc.version.
+  isAutoGenerated  Boolean  @default(false) @map("is_auto_generated")
+  sourceBmcVersion Int?     @map("source_bmc_version")
   createdAt        DateTime @default(now()) @map("created_at")
 
-  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  versions       ScriptVersion[]  @relation("CollectionVersions")
-  currentVersion ScriptVersion?   @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions       ScriptVersion[] @relation("CollectionVersions")
+  currentVersion ScriptVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
 
   @@index([workspaceId])
+  @@index([workspaceId, isAutoGenerated])
   @@map("script_collections")
 }
 
 model ScriptVersion {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  collectionId String   @map("collection_id") @db.Uuid
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  collectionId String    @map("collection_id") @db.Uuid
   version      Int
-  status       String   @default("draft")
+  status       String    @default("draft")
   publishedAt  DateTime? @map("published_at")
-  createdAt    DateTime @default(now()) @map("created_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
-  collection           ScriptCollection  @relation("CollectionVersions", fields: [collectionId], references: [id], onDelete: Cascade)
-  asCurrentForCollection ScriptCollection? @relation("CurrentVersion")
-  blocks               ScriptStageBlock[]
+  collection             ScriptCollection   @relation("CollectionVersions", fields: [collectionId], references: [id], onDelete: Cascade)
+  asCurrentForCollection ScriptCollection?  @relation("CurrentVersion")
+  blocks                 ScriptStageBlock[]
 
   @@unique([collectionId, version])
   @@map("script_versions")
@@ -480,16 +487,16 @@ model AnswerTemplate {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model MeetingSummary {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  meetingId     String   @unique @map("meeting_id") @db.Uuid
-  summary       String
-  objectionsJson Json    @map("objections_json")
-  nextStepsJson Json     @map("next_steps_json")
-  followupEmail Json?    @map("followup_email")
-  crmSuggestionsJson Json? @map("crm_suggestions_json")
-  adherenceJson Json?    @map("adherence_json")
-  lowSignal     Boolean  @default(false) @map("low_signal")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  meetingId          String   @unique @map("meeting_id") @db.Uuid
+  summary            String
+  objectionsJson     Json     @map("objections_json")
+  nextStepsJson      Json     @map("next_steps_json")
+  followupEmail      Json?    @map("followup_email")
+  crmSuggestionsJson Json?    @map("crm_suggestions_json")
+  adherenceJson      Json?    @map("adherence_json")
+  lowSignal          Boolean  @default(false) @map("low_signal")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
@@ -497,16 +504,16 @@ model MeetingSummary {
 }
 
 model AuditLog {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId   String   @map("workspace_id") @db.Uuid
-  actorUserId   String?  @map("actor_user_id") @db.Uuid
-  action        String
-  resourceType  String   @map("resource_type")
-  resourceId    String   @map("resource_id")
-  metadataJson  Json     @default("{}") @map("metadata_json")
-  ipAddress     String?  @map("ip_address")
-  userAgent     String?  @map("user_agent")
-  createdAt     DateTime @default(now()) @map("created_at")
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String   @map("workspace_id") @db.Uuid
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String   @map("resource_id")
+  metadataJson Json     @default("{}") @map("metadata_json")
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   actor     User?     @relation(fields: [actorUserId], references: [id])
@@ -517,13 +524,13 @@ model AuditLog {
 }
 
 model RetentionPolicy {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId     String   @map("workspace_id") @db.Uuid
-  transcriptDays  Int      @default(30) @map("transcript_days")
-  audioDays       Int      @default(0) @map("audio_days")
-  summaryDays     Int      @default(365) @map("summary_days")
-  auditDays       Int      @default(365) @map("audit_days")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String   @map("workspace_id") @db.Uuid
+  transcriptDays Int      @default(30) @map("transcript_days")
+  audioDays      Int      @default(0) @map("audio_days")
+  summaryDays    Int      @default(365) @map("summary_days")
+  auditDays      Int      @default(365) @map("audit_days")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   meetings  Meeting[]
@@ -539,7 +546,7 @@ model LatencyEvent {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   workspaceId String   @map("workspace_id") @db.Uuid
   meetingId   String?  @map("meeting_id") @db.Uuid
-  stage       String   // "transcript_final" | "intent" | "retrieval" | "suggestion" | "coach_total"
+  stage       String // "transcript_final" | "intent" | "retrieval" | "suggestion" | "coach_total"
   latencyMs   Int      @map("latency_ms")
   degraded    Boolean  @default(false)
   createdAt   DateTime @default(now()) @map("created_at")
@@ -553,20 +560,20 @@ model LatencyEvent {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model BillingAccount {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId       String   @unique @map("workspace_id") @db.Uuid
-  stripeCustomerId  String?  @unique @map("stripe_customer_id")
-  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
-  planTier          String   @default("free") @map("plan_tier")        // free | pro | enterprise
-  status            String   @default("active")                          // active | trialing | past_due | canceled
-  seats             Int      @default(1)
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String    @unique @map("workspace_id") @db.Uuid
+  stripeCustomerId     String?   @unique @map("stripe_customer_id")
+  stripeSubscriptionId String?   @unique @map("stripe_subscription_id")
+  planTier             String    @default("free") @map("plan_tier") // free | pro | enterprise
+  status               String    @default("active") // active | trialing | past_due | canceled
+  seats                Int       @default(1)
   /// Soft cap on meeting hours per period. -1 = unlimited.
-  meetingHourLimit  Int      @default(50) @map("meeting_hour_limit")
-  currentPeriodEnd  DateTime? @map("current_period_end")
-  createdAt         DateTime @default(now()) @map("created_at")
-  updatedAt         DateTime @updatedAt @map("updated_at")
+  meetingHourLimit     Int       @default(50) @map("meeting_hour_limit")
+  currentPeriodEnd     DateTime? @map("current_period_end")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  usageCounters     UsageCounter[]
+  usageCounters UsageCounter[]
 
   @@map("billing_accounts")
 }
@@ -575,18 +582,18 @@ model BillingAccount {
 /// near-limit). Workspace-scoped, addressed to a single user. The macOS
 /// overlay polls /v1/notifications/unread while a session is live.
 model Notification {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId String   @map("workspace_id") @db.Uuid
-  userId      String   @map("user_id") @db.Uuid
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
   /// "suggestion.flagged" | "suggestion.commented" | "billing.warn"
   kind        String
   title       String
   body        String
   /// Optional deep-link path within the admin web (e.g. /meetings/<id>).
-  linkPath    String?  @map("link_path")
-  payload     Json     @default("{}")
+  linkPath    String?   @map("link_path")
+  payload     Json      @default("{}")
   readAt      DateTime? @map("read_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
 
   @@index([userId, readAt, createdAt])
   @@index([workspaceId, createdAt])
@@ -596,14 +603,14 @@ model Notification {
 /// Per-period usage counters. One row per (workspace, period_start, kind).
 /// kind ∈ { meeting_hours, mar, knowledge_chunks }.
 model UsageCounter {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId     String   @map("workspace_id") @db.Uuid
-  billingAccountId String  @map("billing_account_id") @db.Uuid
-  kind            String
-  periodStart     DateTime @map("period_start")
-  periodEnd       DateTime @map("period_end")
-  value           Int      @default(0)
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId      String   @map("workspace_id") @db.Uuid
+  billingAccountId String   @map("billing_account_id") @db.Uuid
+  kind             String
+  periodStart      DateTime @map("period_start")
+  periodEnd        DateTime @map("period_end")
+  value            Int      @default(0)
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
 
