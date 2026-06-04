@@ -94,17 +94,31 @@ defects compound:
 > The backend refactor fixes **zero** of the live symptom — the screenshot is 100%
 > client-side via `services/api` (already correct). **Ship the client hotfix first.**
 
-- **PR-A — EMERGENCY client hotfix** (fixes the screenshot): `getValidAccessToken` +
-  rewritten `refreshAccessToken` (promise-lifetime coalesce + CAS + status-branched
-  dead-clear + min-interval) + route `signedFetch`/startCapture/pollInbox through it +
-  `AuthState` + tests. ≤5 files, independently shippable. Bump manifest.
-- **PR-B — fast-follow one-line OR-fix** to the 5 broken services + per-service expired test.
-- **PR-C** — build `@athena/auth` (no service touched) + CI tripwire + ESLint ban.
-- **PR-D/E** — migrate the 5 + postcall + gateway-HTTP to `@athena/auth` (de-dup).
-- **PR-F** — gateway WS `4011`/`TOKEN_EXPIRED` contract (version-gated, additive); fix
-  failing `server.test.ts`.
-- **PR-G** — client WS (offscreen) + UI three-state (lands after PR-F).
-- **PR-H** — `api` adoption (Clerk `preVerify`) + refresh transaction/reuse-grace (last, highest risk).
+- ✅ **PR-A — EMERGENCY client hotfix** (fixes the screenshot) — SHIPPED `9f5f2ad`.
+  `getValidAccessToken` + rewritten `refreshAccessToken` (promise-lifetime coalesce +
+  CAS + status-branched dead-clear + min-interval); `signedFetch`/startCapture/pollInbox
+  routed through it; pure logic in `background/auth-logic.ts` (10 tests); `AuthState` +
+  WS close-code constants in `shared/types.ts`. Extension 0.1.18.
+- ✅ **PR-B — one-line OR-fix** to the 5 broken services (analytics, billing, knowledge,
+  orchestrator, retention-worker) — SHIPPED `9f5f2ad`. All now classify expiry correctly.
+- ✅ **PR-C — `@athena/auth` package + CI tripwire** — SHIPPED `e9f2249`. No service wired
+  (zero prod risk). 16 tests. `scripts/check-no-rogue-auth.sh` (8 legacy files allow-listed).
+
+  --- everything below is PENDING (recommended: a fresh, focused session) ---
+
+- ⬜ **PR-D/E** — migrate the 5 + postcall + gateway-HTTP to `@athena/auth` (de-dup; delete
+  each `lib/auth.ts`, swap `server.ts` import, add dep, shrink the tripwire allow-list).
+- ⬜ **PR-F** — gateway WS `4011`/`TOKEN_EXPIRED` contract (version-gated, additive); fix
+  failing `server.test.ts` (mint a fresh valid token in the harness — don't edit assertions).
+- ⬜ **PR-G** — client WS (offscreen refresh-as-source-of-truth + `4011` fast-path) + UI
+  three-state via `deriveAuthState` (already built+tested in `auth-logic.ts`). After PR-F.
+- ⬜ **PR-H** — `api` adoption (Clerk `preVerify`) + refresh-route transaction/reuse-grace
+  (touches the auth schema → migration). LAST, highest risk; do NOT bundle with others.
+
+**Handoff note (2026-06-04):** A/B/C shipped to `main`. The live incident is resolved.
+D–H are the systemic hardening; each is independently shippable behind the tripwire.
+`@athena/auth` is built + tested and ready to import. Recommend doing PR-H (api/Clerk +
+DB migration) in its own session with full context, given it touches live auth + schema.
 
 ## 7. Verification
 - HTTP guard matrix per service: expired→`401`+`TOKEN_EXPIRED`, malformed/wrong-secret→`TOKEN_INVALID`,
