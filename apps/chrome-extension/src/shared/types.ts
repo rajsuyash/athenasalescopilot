@@ -116,12 +116,36 @@ export interface ActiveMeeting {
  * meet.google.com page (which can fire chrome.runtime.sendMessage) from
  * exfiltrating credentials via popup.query.
  */
+/**
+ * Three-state auth model so the UI distinguishes a recoverable expired access
+ * token from a genuinely-ended session:
+ *  - 'valid'       access token present and not past expiry
+ *  - 'refreshable' access token expired but a refresh token is present (the
+ *                  background silently refreshes — STILL shows as signed-in)
+ *  - 'signed-out'  no refresh token, or the refresh token was rejected
+ * Consumed by the popup/panel in PR-G; defined here so all surfaces agree.
+ */
+export type AuthState = 'valid' | 'refreshable' | 'signed-out';
+
 export interface AccountInfo {
+  /** Derived: state !== 'signed-out'. Kept for backward-compat with callers
+   *  that haven't migrated to `state` yet. */
   isSignedIn: boolean;
+  /** Validity-aware auth state (see AuthState). Optional during PR-G migration. */
+  state?: AuthState;
   email: string | null;
   /** Stable hint for the popup so it can show "session expires in N min". */
   expiresAt: string | null;
 }
+
+/**
+ * WebSocket close codes for auth failures. ADDITIVE: 4001 keeps its original
+ * meaning (any auth failure) so already-deployed clients are never bricked;
+ * 4011 is the new, narrower "token expired — refresh and reconnect" signal the
+ * gateway emits to version-aware clients (PR-F/PR-G).
+ */
+export const WS_CLOSE_TOKEN_INVALID = 4001;
+export const WS_CLOSE_TOKEN_EXPIRED = 4011;
 
 /**
  * User-controllable preferences. Excludes credentials. Used in both the
@@ -168,8 +192,10 @@ export const MEET_RE = /^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3
  * leading `^` and trailing `$` per entry. Anything not matching falls back
  * to DEFAULT_SETTINGS at storage-read time.
  */
-export const ALLOWED_API_HOST_RE = /^(athena-api-production-aa5b\.up\.railway\.app|localhost:\d+|127\.0\.0\.1:\d+)$/;
-export const ALLOWED_GATEWAY_HOST_RE = /^(athena-realtime-production\.up\.railway\.app|localhost:\d+|127\.0\.0\.1:\d+)$/;
+export const ALLOWED_API_HOST_RE =
+  /^(athena-api-production-aa5b\.up\.railway\.app|localhost:\d+|127\.0\.0\.1:\d+)$/;
+export const ALLOWED_GATEWAY_HOST_RE =
+  /^(athena-realtime-production\.up\.railway\.app|localhost:\d+|127\.0\.0\.1:\d+)$/;
 
 export function isAllowedApiUrl(raw: string): boolean {
   try {

@@ -20,6 +20,7 @@ import {
   type RuntimeMessage,
 } from '../shared/types.js';
 import { log } from '../shared/log.js';
+import { needsRefresh, classifyRefreshHttpFailure } from './auth-logic.js';
 
 /**
  * Trust boundary: any chrome.runtime.onMessage handler is reachable by
@@ -252,61 +253,123 @@ interface LoginResponseBody {
   expiresAt: string;
 }
 
-let inFlightRefresh: Promise<string | null> | null = null;
+/**
+ * Refresh outcome. `dead` distinguishes a refresh token the server actively
+ * REJECTED (401/403 → the session is over, sign the user out) from a transient
+ * failure (5xx/429/network → keep the tokens; the next attempt may succeed).
+ * Signing out on a transient blip would mass-logout the field on any deploy
+ * hiccup, so we only clear credentials when `dead`.
+ */
+type RefreshOutcome = { ok: true; token: string } | { ok: false; dead: boolean };
 
-async function refreshAccessToken(): Promise<string | null> {
-  // Coalesce concurrent refresh attempts — one in-flight call serves all
-  // callers blocked on a 401.
+/** Don't hammer /v1/auth/refresh: skip a proactive refresh if one just won. */
+const REFRESH_MIN_INTERVAL_MS = 5_000;
+
+let inFlightRefresh: Promise<RefreshOutcome> | null = null;
+let lastRefreshOkAt = 0;
+
+async function refreshAccessToken(): Promise<RefreshOutcome> {
+  // Promise-LIFETIME coalescing: every caller that races in while a refresh is
+  // in flight awaits the SAME promise, so the single-use rotating refresh token
+  // is spent exactly once. (The old 50ms window let a second caller slip past,
+  // double-spend the rotating token, and get a 401 — the proximate cause of the
+  // 2026-06-04 "Token has expired" incident.)
   if (inFlightRefresh) return inFlightRefresh;
-  inFlightRefresh = (async () => {
-    const settings = await getSettings();
-    if (!settings.refreshToken) return null;
+  inFlightRefresh = (async (): Promise<RefreshOutcome> => {
     try {
-      const r = await fetch(`${settings.apiUrl}/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ refreshToken: settings.refreshToken }),
-      });
-      if (!r.ok) return null;
+      const settings = await getSettings();
+      const presented = settings.refreshToken;
+      if (!presented) return { ok: false, dead: true };
+
+      let r: Response;
+      try {
+        r = await fetch(`${settings.apiUrl}/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ refreshToken: presented }),
+        });
+      } catch {
+        return { ok: false, dead: false }; // network error → transient, keep tokens
+      }
+
+      if (!r.ok) {
+        const { dead } = classifyRefreshHttpFailure(r.status);
+        if (dead) {
+          // Server rejected the refresh token → the session is genuinely over.
+          // Clear credentials so the UI honestly shows signed-out.
+          const cur = await getSettings();
+          await writeState({
+            settings: { ...cur, accessToken: null, refreshToken: null, expiresAt: null },
+          });
+        }
+        return { ok: false, dead };
+      }
+
       const body = (await r.json()) as LoginResponseBody;
-      const next = await getSettings();
+      // CAS: if another writer rotated the refresh token while we were in flight,
+      // the winner already persisted a newer pair — return theirs rather than
+      // clobbering it with ours (writeState is a non-atomic read-modify-write).
+      const cur = await getSettings();
+      if (cur.refreshToken && cur.refreshToken !== presented && cur.accessToken) {
+        lastRefreshOkAt = Date.now();
+        return { ok: true, token: cur.accessToken };
+      }
       await writeState({
         settings: {
-          ...next,
+          ...cur,
           accessToken: body.accessToken,
           refreshToken: body.refreshToken,
           expiresAt: body.expiresAt,
         },
       });
-      return body.accessToken;
-    } catch {
-      return null;
+      lastRefreshOkAt = Date.now();
+      return { ok: true, token: body.accessToken };
     } finally {
-      // small delay so a flurry of 401s in the same tick share the same fetch
-      setTimeout(() => {
-        inFlightRefresh = null;
-      }, 50);
+      inFlightRefresh = null;
     }
   })();
   return inFlightRefresh;
 }
 
 /**
- * fetch() wrapper that injects the current access token and, on 401,
- * silently refreshes + retries once. Use everywhere instead of raw fetch
- * for endpoints that require auth.
+ * The SINGLE source of a usable bearer token. Proactively refreshes when the
+ * access token is expired or within TOKEN_SKEW_MS of expiry, so no authed call
+ * ever *sends* a dead token. Returns null when there is no usable session
+ * (no token, or the refresh token was rejected) — callers surface "sign in".
  *
- * Each call is bounded by an AbortController so a hung backend never wedges
- * the SW alarm callback (e.g. inbox poll firing every 30s).
+ * Every authed call site must go through this (enforced by a grep test) so
+ * refresh ordering can never be forgotten again.
+ */
+async function getValidAccessToken(): Promise<string | null> {
+  const s = await getSettings();
+  if (!s.accessToken) return null;
+  if (!needsRefresh(s.expiresAt, Date.now())) return s.accessToken;
+  if (Date.now() - lastRefreshOkAt < REFRESH_MIN_INTERVAL_MS) {
+    // A refresh just succeeded for another caller; re-read instead of re-fetching.
+    return (await getSettings()).accessToken;
+  }
+  const out = await refreshAccessToken();
+  if (out.ok) return out.token;
+  // Transient failure → fall back to the existing token (signedFetch's 401 net
+  // still covers it). Dead → no usable session.
+  return out.dead ? null : s.accessToken;
+}
+
+/**
+ * fetch() wrapper that injects a VALID access token (proactively refreshed) and,
+ * on a 401, refreshes + retries once as a safety net for server-side early
+ * revocation or clock skew. Use everywhere instead of raw fetch for authed
+ * endpoints.
+ *
+ * Each call is bounded by an AbortController so a hung backend never wedges the
+ * SW alarm callback (e.g. inbox poll firing every 30s).
  */
 const SIGNED_FETCH_TIMEOUT_MS = 15_000;
 
 async function signedFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const settings = await getSettings();
+  const token = await getValidAccessToken();
   const headers = new Headers(init.headers);
-  if (settings.accessToken) {
-    headers.set('authorization', `Bearer ${settings.accessToken}`);
-  }
+  if (token) headers.set('authorization', `Bearer ${token}`);
   const doFetch = async (auth: Headers): Promise<Response> => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), SIGNED_FETCH_TIMEOUT_MS);
@@ -316,11 +379,12 @@ async function signedFetch(url: string, init: RequestInit = {}): Promise<Respons
       clearTimeout(timer);
     }
   };
-  let res = await doFetch(headers);
+  const res = await doFetch(headers);
   if (res.status !== 401) return res;
-  const fresh = await refreshAccessToken();
-  if (!fresh) return res;
-  headers.set('authorization', `Bearer ${fresh}`);
+  // Safety net: a token we believed valid was rejected (early revoke / skew).
+  const out = await refreshAccessToken();
+  if (!out.ok) return res;
+  headers.set('authorization', `Bearer ${out.token}`);
   return doFetch(headers);
 }
 
@@ -428,7 +492,9 @@ async function persistStats(buf: CaptionBuffer): Promise<void> {
   await writeState({ captionStats: stats });
 }
 
-async function ingestCaption(msg: Extract<RuntimeMessage, { type: 'meet.caption' }>): Promise<void> {
+async function ingestCaption(
+  msg: Extract<RuntimeMessage, { type: 'meet.caption' }>,
+): Promise<void> {
   const settings = await getSettings();
   if (!settings.shipCaptions || !settings.accessToken) return;
 
@@ -534,11 +600,9 @@ async function ensureInboxPolling(): Promise<void> {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === INBOX_ALARM) {
     void (async () => {
-      // Pre-refresh so the next polled call doesn't pay the 401 penalty.
-      const s = await getSettings();
-      if (s.expiresAt && Date.parse(s.expiresAt) - Date.now() < 60_000) {
-        await refreshAccessToken();
-      }
+      // Pre-refresh through the single chokepoint so the next polled call
+      // doesn't pay the 401 penalty (and shares the coalesced refresh).
+      await getValidAccessToken();
       void pollInbox();
       // Also retry any buffered captions whose flush timer died with the
       // service worker. Cheap; no-op when buffers are empty.
@@ -569,10 +633,9 @@ chrome.notifications.onClicked.addListener(async (notifId) => {
   const settings = await getSettings();
   // Best-effort mark-as-read so the badge clears next poll.
   if (settings.accessToken) {
-    void signedFetch(
-      `${settings.apiUrl}/v1/notifications/${encodeURIComponent(id)}/read`,
-      { method: 'POST' },
-    ).catch(() => {});
+    void signedFetch(`${settings.apiUrl}/v1/notifications/${encodeURIComponent(id)}/read`, {
+      method: 'POST',
+    }).catch(() => {});
   }
   chrome.notifications.clear(notifId);
 });
@@ -686,19 +749,17 @@ async function startCapture(streamId: string): Promise<{ ok: boolean; error?: st
     // Surface the actual server-side reason so reps see PAYMENT_OVERDUE,
     // METERING_LIMIT, FORBIDDEN, etc. instead of a flat "could not resolve".
     const detail = lastEnsure
-      ? lastEnsure.message ?? lastEnsure.code ?? `HTTP ${lastEnsure.status ?? '?'}`
+      ? (lastEnsure.message ?? lastEnsure.code ?? `HTTP ${lastEnsure.status ?? '?'}`)
       : 'no live meeting found';
     return { ok: false, error: `could not start meeting: ${detail}` };
   }
 
-  // Pre-refresh access token — the offscreen doc opens a long-lived WS and
-  // can't transparently refresh on a 401 mid-capture.
-  if (settings.expiresAt && Date.parse(settings.expiresAt) - Date.now() < 60_000) {
-    await refreshAccessToken();
-  }
+  // Pre-refresh through the single chokepoint — the offscreen doc opens a
+  // long-lived WS and can't transparently refresh on a 401 mid-capture, so the
+  // token must be valid before we hand it off.
+  const accessToken = await getValidAccessToken();
+  if (!accessToken) return { ok: false, error: 'session expired — sign in again' };
   const fresh = await getSettings();
-  const accessToken = fresh.accessToken;
-  if (!accessToken) return { ok: false, error: 'sign in first' };
 
   await ensureOffscreen();
 
@@ -833,7 +894,8 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
       lastError: msg.lastError !== undefined ? msg.lastError : state.capture.lastError,
       sessionId: msg.sessionId !== undefined ? msg.sessionId : state.capture.sessionId,
       closed: msg.closed ?? state.capture.closed,
-      reconnectAttempt: msg.reconnectAttempt !== undefined ? msg.reconnectAttempt : state.capture.reconnectAttempt,
+      reconnectAttempt:
+        msg.reconnectAttempt !== undefined ? msg.reconnectAttempt : state.capture.reconnectAttempt,
     };
     await writeState({ capture: next });
     if (next.closed) {
@@ -885,8 +947,10 @@ function sanitizeSuggestion(raw: unknown): CleanSuggestion | null {
   const r = raw as RawSuggestion;
   const type = clampString(r.type, 64);
   if (!type) return null;
-  const answerText = r.answerText === null ? null : clampString(r.answerText, MAX_SUGGESTION_FIELD_LEN);
-  const followupText = r.followupText === null ? null : clampString(r.followupText, MAX_SUGGESTION_FIELD_LEN);
+  const answerText =
+    r.answerText === null ? null : clampString(r.answerText, MAX_SUGGESTION_FIELD_LEN);
+  const followupText =
+    r.followupText === null ? null : clampString(r.followupText, MAX_SUGGESTION_FIELD_LEN);
   const out: CleanSuggestion = { type, answerText, followupText };
   if (typeof r.confidenceScore === 'number' && Number.isFinite(r.confidenceScore)) {
     out.confidenceScore = r.confidenceScore;
@@ -1164,7 +1228,9 @@ function buildPopupQueryResponse(state: PersistedState): PopupQueryResponse {
  */
 function sanitizePrefs(raw: PopupPrefs): PopupPrefs {
   const apiUrl = isAllowedApiUrl(raw.apiUrl) ? raw.apiUrl : DEFAULT_SETTINGS.apiUrl;
-  const gatewayUrl = isAllowedGatewayUrl(raw.gatewayUrl) ? raw.gatewayUrl : DEFAULT_SETTINGS.gatewayUrl;
+  const gatewayUrl = isAllowedGatewayUrl(raw.gatewayUrl)
+    ? raw.gatewayUrl
+    : DEFAULT_SETTINGS.gatewayUrl;
   return {
     apiUrl,
     gatewayUrl,
@@ -1274,13 +1340,13 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
         return;
       }
       try {
-        await refreshAccessToken();
-        const s = await getSettings();
-        if (!s.accessToken) {
-          sendResponse({ ok: false, error: 'no_token' });
+        const out = await refreshAccessToken();
+        if (!out.ok) {
+          // dead → session over (sign in again); transient → offscreen backs off.
+          sendResponse({ ok: false, error: out.dead ? 'signed_out' : 'refresh_failed' });
           return;
         }
-        sendResponse({ ok: true, accessToken: s.accessToken });
+        sendResponse({ ok: true, accessToken: out.token });
       } catch (err) {
         sendResponse({ ok: false, error: (err as Error).message });
       }
@@ -1395,9 +1461,9 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
           })
             .then(async (res) => {
               if (!res.ok) return;
-              const me = (await res.json().catch(() => null)) as
-                | { user?: { email?: string } }
-                | null;
+              const me = (await res.json().catch(() => null)) as {
+                user?: { email?: string };
+              } | null;
               if (me?.user?.email) {
                 const cur = await getSettings();
                 await writeState({
@@ -1457,7 +1523,10 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
           return;
         }
         const captions = [
-          { text: 'Honestly, this is way too expensive for what we get.', speakerLabel: 'Customer' },
+          {
+            text: 'Honestly, this is way too expensive for what we get.',
+            speakerLabel: 'Customer',
+          },
           { text: 'We already have a vendor that handles this for us.', speakerLabel: 'Customer' },
           { text: 'Just send me an email and I will think about it.', speakerLabel: 'Customer' },
         ];

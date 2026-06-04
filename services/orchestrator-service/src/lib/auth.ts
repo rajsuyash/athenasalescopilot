@@ -39,26 +39,31 @@ export const authPlugin = fp<{ secret: string }>(async (app: FastifyInstance, op
       this.auth = claims;
       return claims;
     } catch (err) {
-      if ((err as { code?: string }).code === 'FAST_JWT_EXPIRED') {
+      // FAST_JWT_EXPIRED is @fast-jwt's code and never fires through the
+      // @fastify/jwt wrapper; the real one is FST_JWT_AUTHORIZATION_TOKEN_EXPIRED.
+      // Checking only the former misclassified expired tokens as TOKEN_INVALID,
+      // breaking the client refresh path (2026-06-04 incident). Keep both.
+      const jwtCode = (err as { code?: string }).code;
+      if (jwtCode === 'FST_JWT_AUTHORIZATION_TOKEN_EXPIRED' || jwtCode === 'FAST_JWT_EXPIRED') {
         throw Object.assign(new Error('TOKEN_EXPIRED'), { statusCode: 401, code: 'TOKEN_EXPIRED' });
       }
-      if ((err as { code?: string }).code === 'MISSING_WORKSPACE_CLAIM') throw err;
+      if (jwtCode === 'MISSING_WORKSPACE_CLAIM') throw err;
       throw Object.assign(new Error('TOKEN_INVALID'), { statusCode: 401, code: 'TOKEN_INVALID' });
     }
   });
-  app.decorateRequest('requirePermission', async function (
-    this: FastifyRequest,
-    permission: Permission,
-  ) {
-    const claims = this.auth ?? (await this.requireAuth());
-    if (!can(claims.role, permission)) {
-      const required = minimumRoleFor(permission) ?? 'admin';
-      throw Object.assign(new Error('INSUFFICIENT_ROLE'), {
-        statusCode: 403,
-        code: 'INSUFFICIENT_ROLE',
-        details: { required },
-      });
-    }
-    return claims;
-  });
+  app.decorateRequest(
+    'requirePermission',
+    async function (this: FastifyRequest, permission: Permission) {
+      const claims = this.auth ?? (await this.requireAuth());
+      if (!can(claims.role, permission)) {
+        const required = minimumRoleFor(permission) ?? 'admin';
+        throw Object.assign(new Error('INSUFFICIENT_ROLE'), {
+          statusCode: 403,
+          code: 'INSUFFICIENT_ROLE',
+          details: { required },
+        });
+      }
+      return claims;
+    },
+  );
 });
