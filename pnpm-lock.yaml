@@ -581,6 +581,9 @@ importers:
 
   services/realtime-gateway:
     dependencies:
+      '@athena/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@athena/db':
         specifier: workspace:*
         version: link:../../packages/db

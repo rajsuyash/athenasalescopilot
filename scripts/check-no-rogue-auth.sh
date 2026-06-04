@@ -21,11 +21,10 @@ cd "$(dirname "$0")/.."
 # Files permitted to still reference the literals / import the JWT libs while
 # their service is mid-migration. SHRINK this as each PR migrates a service.
 LEGACY_ALLOWLIST=(
-  # Migrated to @athena/auth in PR-D/E (files deleted):
-  #   analytics, billing, knowledge, orchestrator, retention-worker, postcall.
-  # Still pending — these migrate in PR-F (gateway WS) and PR-H (api/Clerk):
+  # Migrated to @athena/auth: analytics, billing, knowledge, orchestrator,
+  # retention-worker, postcall (PR-D/E), realtime-gateway (PR-F).
+  # Still pending — migrates in PR-H (api keeps Clerk via the preVerify hook):
   "services/api/src/plugins/auth.ts"
-  "services/realtime-gateway/src/lib/auth.ts"
 )
 
 # Files that are ALWAYS allowed (the single source of truth + this script).

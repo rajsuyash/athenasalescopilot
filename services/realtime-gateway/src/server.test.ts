@@ -22,17 +22,29 @@ function port(app: FastifyInstance): number {
   return addr.port;
 }
 
-async function nextMessage(ws: WebSocket): Promise<unknown> {
+/** Collect messages until one has the given `type`, or time out. Robust to
+ *  extra/ordering of server frames. */
+async function waitForType(
+  ws: WebSocket,
+  type: string,
+  ms = 1500,
+): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), 1500);
-    ws.once('message', (data) => {
-      clearTimeout(timer);
+    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${type}`)), ms);
+    const onMessage = (data: WebSocket.RawData): void => {
+      let m: Record<string, unknown>;
       try {
-        resolve(JSON.parse(data.toString()));
-      } catch (err) {
-        reject(err);
+        m = JSON.parse(data.toString()) as Record<string, unknown>;
+      } catch {
+        return;
       }
-    });
+      if (m.type === type) {
+        clearTimeout(timer);
+        ws.off('message', onMessage);
+        resolve(m);
+      }
+    };
+    ws.on('message', onMessage);
     ws.once('error', (err) => {
       clearTimeout(timer);
       reject(err);
@@ -53,53 +65,62 @@ describe('realtime-gateway', () => {
   it('healthz', async () => {
     const res = await app.inject({ method: 'GET', url: '/healthz' });
     assert.equal(res.statusCode, 200);
-    const body = res.json() as { ok: boolean; stt: string };
+    const body = res.json() as { ok: boolean };
     assert.equal(body.ok, true);
-    assert.equal(body.stt, 'mock');
   });
 
-  it('rejects WS without a token', async () => {
+  it('rejects a pre-auth non-auth frame with TOKEN_INVALID and close 4001', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port(app)}/v1/sessions`);
     const closed = new Promise<{ code: number }>((resolve) =>
       ws.once('close', (code) => resolve({ code })),
     );
-    const m = await nextMessage(ws);
-    assert.equal((m as { type: string }).type, 'error');
-    assert.equal((m as { code: string }).code, 'TOKEN_INVALID');
-    const r = await closed;
-    assert.equal(r.code, 4001);
+    // First the server prompts for auth; sending anything that isn't an auth
+    // frame is rejected.
+    await waitForType(ws, 'auth.required');
+    ws.send(JSON.stringify({ type: 'hello', meetingId: 'whatever' }));
+    const m = await waitForType(ws, 'error');
+    assert.equal(m.code, 'TOKEN_INVALID');
+    assert.equal((await closed).code, 4001);
   });
 
-  it('accepts valid token and sends hello.required', async () => {
-    const token = app.jwt.sign({
-      sub: 'u_1',
-      workspaceId: 'ws_1',
-      role: 'rep',
-      membershipId: 'm_1',
-    });
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${port(app)}/v1/sessions?token=${encodeURIComponent(token)}`,
-    );
-    const m = await nextMessage(ws);
-    assert.equal((m as { type: string }).type, 'hello.required');
+  // Query-string token transport was removed (it leaks tokens into URLs/logs).
+  // The supported browser transport is the first-frame {type:'auth', token}
+  // handshake, so the auth tests below authenticate that way.
+  const validClaims = { sub: 'u_1', workspaceId: 'ws_1', role: 'rep', membershipId: 'm_1' };
+
+  it('accepts a valid token via the auth-frame handshake and sends hello.required', async () => {
+    const token = app.jwt.sign(validClaims);
+    const ws = new WebSocket(`ws://127.0.0.1:${port(app)}/v1/sessions`);
+    await waitForType(ws, 'auth.required');
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    // auth.ok and hello.required are sent back-to-back; collect until the latter.
+    await waitForType(ws, 'hello.required');
     ws.close();
   });
 
-  it('rejects bad hello payload', async () => {
-    const token = app.jwt.sign({
-      sub: 'u_1',
-      workspaceId: 'ws_1',
-      role: 'rep',
-      membershipId: 'm_1',
-    });
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${port(app)}/v1/sessions?token=${encodeURIComponent(token)}`,
+  it('rejects an EXPIRED token with code TOKEN_EXPIRED and WS close 4011', async () => {
+    // Mint with a manual past exp (no expiresIn configured on this signer path).
+    const token = app.jwt.sign({ ...validClaims, exp: Math.floor(Date.now() / 1000) - 60 });
+    const ws = new WebSocket(`ws://127.0.0.1:${port(app)}/v1/sessions`);
+    const closed = new Promise<{ code: number }>((resolve) =>
+      ws.once('close', (code) => resolve({ code })),
     );
-    await nextMessage(ws); // skip hello.required
+    await waitForType(ws, 'auth.required');
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    const m = await waitForType(ws, 'error');
+    assert.equal(m.code, 'TOKEN_EXPIRED');
+    assert.equal((await closed).code, 4011);
+  });
+
+  it('rejects bad hello payload with VALIDATION_ERROR (after authenticating)', async () => {
+    const token = app.jwt.sign(validClaims);
+    const ws = new WebSocket(`ws://127.0.0.1:${port(app)}/v1/sessions`);
+    await waitForType(ws, 'auth.required');
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    await waitForType(ws, 'hello.required');
     ws.send(JSON.stringify({ type: 'hello', meetingId: 'not-a-uuid' }));
-    const m = await nextMessage(ws);
-    assert.equal((m as { type: string }).type, 'error');
-    assert.equal((m as { code: string }).code, 'VALIDATION_ERROR');
+    const m = await waitForType(ws, 'error');
+    assert.equal(m.code, 'VALIDATION_ERROR');
     ws.close();
   });
 });
