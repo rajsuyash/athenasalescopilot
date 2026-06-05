@@ -20,7 +20,7 @@ import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import { ingestDocument } from '../ingest/service.js';
 import type { MatrixEntry } from './matrix-generator.js';
 
-const MATRIX_CATEGORY = 'objection-handling-matrix';
+export const MATRIX_CATEGORY = 'objection-handling-matrix';
 const INGEST_CONCURRENCY = 5;
 
 export interface IndexMatrixArgs {
@@ -33,6 +33,17 @@ export interface IndexMatrixArgs {
 export interface IndexMatrixResult {
   indexed: number;
   failed: number;
+}
+
+/** Display-ready projection of a matrix entry, served by the wizard read path.
+ *  Sourced from chunk tags so the GET endpoint never has to parse markdown.
+ *  The full 7-step reframe stays in the doc body for the live call surface. */
+export interface MatrixDisplayEntry {
+  archetype: string;
+  bmcTheme: string;
+  objectionText: string;
+  suggestedLine: string;
+  triggerPhrases: string[];
 }
 
 export function renderEntryMd(entry: MatrixEntry): string {
@@ -87,6 +98,10 @@ export async function indexObjectionMatrix(
               bmcTheme: entry.bmcTheme,
               bmcVersion: args.bmcVersion,
               triggerPhrases: entry.triggerPhrases,
+              // Display fields for the wizard read path (GET endpoint reads tags
+              // so it never parses the rendered markdown body).
+              objectionText: entry.objectionText,
+              suggestedLine: entry.suggestedLine,
               // Provenance only (F5 audit trail) — not read at serve time.
               groundedOnChunkIds: entry.sourceChunkIds,
             },
@@ -124,6 +139,58 @@ export async function indexObjectionMatrix(
   });
 
   return { indexed, failed };
+}
+
+/**
+ * Read the current (non-archived) objection matrix for a workspace as
+ * display-ready entries. workspace_id is the first predicate (F10). One entry
+ * per source document: a matrix entry renders to a small markdown doc that the
+ * chunker rarely splits, but if it does, every chunk shares identical tags, so
+ * we dedupe by document version and read the first chunk's tags.
+ */
+export async function readObjectionMatrix(workspaceId: string): Promise<MatrixDisplayEntry[]> {
+  const chunks = await prisma.knowledgeChunk.findMany({
+    where: {
+      workspaceId,
+      active: true,
+      documentVersion: {
+        document: { workspaceId, category: MATRIX_CATEGORY, status: { not: 'archived' } },
+      },
+    },
+    select: { documentVersionId: true, chunkOrder: true, tagsJson: true },
+    orderBy: [{ documentVersionId: 'asc' }, { chunkOrder: 'asc' }],
+  });
+
+  const entries: MatrixDisplayEntry[] = [];
+  const seen = new Set<string>();
+  for (const c of chunks) {
+    if (seen.has(c.documentVersionId)) continue;
+    seen.add(c.documentVersionId);
+    const t = (c.tagsJson ?? {}) as Record<string, unknown>;
+    if (t.source !== 'objection-matrix') continue;
+    entries.push({
+      archetype: typeof t.archetype === 'string' ? t.archetype : '',
+      bmcTheme: typeof t.bmcTheme === 'string' ? t.bmcTheme : '',
+      objectionText: typeof t.objectionText === 'string' ? t.objectionText : '',
+      suggestedLine: typeof t.suggestedLine === 'string' ? t.suggestedLine : '',
+      triggerPhrases: Array.isArray(t.triggerPhrases)
+        ? t.triggerPhrases.filter((p): p is string => typeof p === 'string')
+        : [],
+    });
+  }
+  return entries;
+}
+
+/** Map a freshly-generated (in-memory) matrix entry to the display shape, so the
+ *  POST response and the GET read path return byte-identical entry objects. */
+export function toDisplayEntry(entry: MatrixEntry): MatrixDisplayEntry {
+  return {
+    archetype: entry.archetype,
+    bmcTheme: entry.bmcTheme,
+    objectionText: entry.objectionText,
+    suggestedLine: entry.suggestedLine,
+    triggerPhrases: entry.triggerPhrases,
+  };
 }
 
 async function archivePriorMatrixDocs(workspaceId: string): Promise<void> {

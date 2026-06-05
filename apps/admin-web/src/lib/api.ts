@@ -83,6 +83,26 @@ export async function callBackend<T = unknown>(opts: CallOpts): Promise<T> {
 }
 
 /**
+ * Raw forwarder: same Clerk-bearer attachment as callBackend, but returns the
+ * untouched Response so the caller can read a streaming body (e.g. the BMC
+ * builder's Server-Sent Events). callBackend assumes a JSON body and would
+ * consume the stream, so SSE proxies use this instead.
+ */
+export async function backendFetch(opts: CallOpts): Promise<Response> {
+  let bearer: string | null = null;
+  if (opts.auth !== 'none') {
+    bearer = await getBearer();
+    if (!bearer) {
+      return new Response(JSON.stringify({ error: 'UNAUTHENTICATED', message: 'no session' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+  }
+  return doFetch(opts, bearer);
+}
+
+/**
  * Forward a multipart upload from a Next.js route to a backend service.
  * Streams the body straight through — never buffers in admin-web.
  */

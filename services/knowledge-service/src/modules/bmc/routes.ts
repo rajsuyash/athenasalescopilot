@@ -27,7 +27,7 @@ import {
 import { generateScriptFromBmc } from './generator.js';
 import { indexBmcAsKnowledge } from './indexer.js';
 import { generateObjectionMatrixFromBmc } from './matrix-generator.js';
-import { indexObjectionMatrix } from './matrix-indexer.js';
+import { indexObjectionMatrix, readObjectionMatrix, toDisplayEntry } from './matrix-indexer.js';
 
 interface RouteDeps {
   llm: LlmClient;
@@ -173,6 +173,49 @@ export function bmcRoutes(deps: RouteDeps) {
           message: e.message ?? 'unknown',
         });
       }
+    });
+
+    // Wizard Step 3: generate + index the BMC-specific objection→solution
+    // matrix on demand (the same work runPlaybookGen fires automatically, but
+    // the wizard needs a synchronous trigger that returns the entries to show).
+    app.post('/playbooks/objection-matrix/generate', async (req, reply) => {
+      const claims = await req.requirePermission('script:edit');
+      try {
+        const m = await generateObjectionMatrixFromBmc(
+          { workspaceId: claims.workspaceId, actorUserId: claims.sub },
+          { llm: deps.llm, embeddings: deps.embeddings },
+        );
+        const r = await indexObjectionMatrix(
+          {
+            workspaceId: claims.workspaceId,
+            actorUserId: claims.sub,
+            entries: m.kept,
+            bmcVersion: m.bmcVersion,
+          },
+          { embeddings: deps.embeddings },
+        );
+        return reply.code(201).send({
+          ok: true,
+          bmcVersion: m.bmcVersion,
+          indexed: r.indexed,
+          failed: r.failed,
+          dropped: m.dropped.length,
+          entries: m.kept.map(toDisplayEntry),
+        });
+      } catch (err) {
+        const e = err as { statusCode?: number; code?: string; message?: string };
+        return reply.code(e.statusCode ?? 500).send({
+          code: e.code ?? 'MATRIX_GENERATE_FAILED',
+          message: e.message ?? 'unknown',
+        });
+      }
+    });
+
+    // Wizard Step 3 (read / resume): the current grounded matrix for display.
+    app.get('/playbooks/objection-matrix', async (req) => {
+      const claims = await req.requirePermission('knowledge:read');
+      const entries = await readObjectionMatrix(claims.workspaceId);
+      return { entries, count: entries.length };
     });
 
     app.post('/playbooks/bmc/build', async (req, reply) => {

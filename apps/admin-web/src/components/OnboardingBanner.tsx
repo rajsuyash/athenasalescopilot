@@ -18,7 +18,24 @@ export function OnboardingBanner({ workspaceName }: OnboardingBannerProps) {
       <div className="text-xs uppercase tracking-widest text-accent mb-2">
         Welcome to {workspaceName}
       </div>
-      <h2 className="text-lg font-medium mb-4">Two steps to your first coached call</h2>
+      <h2 className="text-lg font-medium mb-4">Get to your first coached call</h2>
+
+      <div className="mb-6 rounded-lg border border-accent/40 bg-accent/10 p-4">
+        <p className="text-sm text-white/85">
+          <strong className="text-white">New here? Start with guided setup.</strong> Answer a few
+          questions and we&apos;ll build your Business Model Canvas, write your probing + pitching
+          script, and pre-build the objections you&apos;ll face — all in a few minutes.
+        </p>
+        <Link
+          href="/onboarding"
+          className="mt-3 inline-flex items-center gap-2 rounded-lg bg-accent text-ink-900 font-semibold px-4 py-2 text-xs hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200"
+        >
+          <span>Start guided setup</span>
+          <Arrow />
+        </Link>
+      </div>
+
+      <p className="text-xs uppercase tracking-widest text-white/40 mb-3">Or set up manually</p>
 
       <ol className="space-y-4 text-sm text-white/80">
         <li className="flex gap-3">
@@ -49,9 +66,8 @@ export function OnboardingBanner({ workspaceName }: OnboardingBannerProps) {
               <Arrow />
             </Link>
             <p className="mt-2 text-xs text-white/50">
-              Already a Rocket CLI user? Run{' '}
-              <code className="text-white/80">rocket listen</code> for a quick test without the
-              extension.
+              Already a Rocket CLI user? Run <code className="text-white/80">rocket listen</code>{' '}
+              for a quick test without the extension.
             </p>
           </div>
         </li>
