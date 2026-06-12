@@ -35,9 +35,13 @@ apps/admin-web/.next/
 apps/admin-web/.env.local
 apps/admin-web/next-env.d.ts
 
-# Chrome extension build artifacts
+# Chrome extension build artifacts. The download zip is regenerated on every
+# admin-web build (chrome-extension scripts/package.mjs) — never commit zips,
+# they drift from source (served 0.1.15 while source was 0.1.19).
 apps/chrome-extension/dist/
 apps/chrome-extension/web-ext-artifacts/
+apps/chrome-extension/*.zip
+apps/admin-web/public/downloads/*.zip
 
 # Test + coverage
 coverage/

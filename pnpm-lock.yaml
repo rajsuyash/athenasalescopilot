@@ -63,9 +63,15 @@ importers:
 
   apps/chrome-extension:
     devDependencies:
+      '@types/adm-zip':
+        specifier: ^0.5.8
+        version: 0.5.8
       '@types/chrome':
         specifier: ^0.0.279
         version: 0.0.279
+      adm-zip:
+        specifier: ^0.5.17
+        version: 0.5.17
       esbuild:
         specifier: ^0.24.0
         version: 0.24.2

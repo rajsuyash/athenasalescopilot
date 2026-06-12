@@ -8,13 +8,15 @@
     "build": "node esbuild.config.mjs && cp src/manifest.json dist/manifest.json && cp src/popup/popup.html dist/popup.html && mkdir -p dist/icons && cp src/icons/*.png dist/icons/ && mkdir -p dist/offscreen && cp src/offscreen/index.html dist/offscreen/index.html && cp src/offscreen/pcm-worklet.js dist/offscreen/pcm-worklet.js && mkdir -p dist/permission && cp src/permission/index.html dist/permission/index.html",
     "build:prod": "ATHENA_PROD=1 node esbuild.config.mjs && cp src/manifest.json dist/manifest.json && cp src/popup/popup.html dist/popup.html && mkdir -p dist/icons && cp src/icons/*.png dist/icons/ && mkdir -p dist/offscreen && cp src/offscreen/index.html dist/offscreen/index.html && cp src/offscreen/pcm-worklet.js dist/offscreen/pcm-worklet.js && mkdir -p dist/permission && cp src/permission/index.html dist/permission/index.html",
     "dev": "node esbuild.config.mjs --watch",
+    "package": "node scripts/package.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx 'src/**/*.test.ts'",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/chrome": "^0.0.279",
+    "adm-zip": "^0.5.17",
     "esbuild": "^0.24.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
