@@ -4,7 +4,9 @@
  * service when the user opts in.
  */
 import {
+  CONNECT_PAGE_ORIGINS,
   DEFAULT_SETTINGS,
+  PAIRING_CODE_RE,
   isAllowedApiUrl,
   isAllowedGatewayUrl,
   type AccountInfo,
@@ -63,6 +65,80 @@ function isPrivilegedSender(sender: chrome.runtime.MessageSender): boolean {
   const url = sender.url ?? '';
   if (url && !url.startsWith(`chrome-extension://${chrome.runtime.id}/`)) return false;
   return true;
+}
+
+/**
+ * Gate for the connect-page content script (one-click sign-in). Same shape as
+ * isMeetContentSender but pinned to the admin-web /connect-extension page —
+ * the ONLY web surface allowed to hand pairing codes to the SW.
+ */
+function isConnectContentSender(sender: chrome.runtime.MessageSender): boolean {
+  if (sender.id !== chrome.runtime.id) return false;
+  if (!sender.tab) return false;
+  const url = sender.url ?? sender.tab.url ?? '';
+  try {
+    const u = new URL(url);
+    return CONNECT_PAGE_ORIGINS.includes(u.origin) && u.pathname.startsWith('/connect-extension');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Claim a one-time pairing code against the api and persist the resulting
+ * token bundle. Shared by auth.pair (typed into the popup) and
+ * auth.pairFromWeb (handed over by the connect page).
+ */
+async function claimPairingCode(code: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const settings = await getSettings();
+    const r = await fetch(`${settings.apiUrl}/v1/auth/extension/pair-claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const body = (await r.json().catch(() => ({}))) as
+      | (LoginResponseBody & { error?: string; message?: string; user?: { email?: string } })
+      | undefined;
+    if (!r.ok || !body?.accessToken) {
+      return { ok: false, error: body?.message ?? `pair-claim failed (HTTP ${r.status})` };
+    }
+    await writeState({
+      settings: {
+        ...settings,
+        accessToken: body.accessToken,
+        refreshToken: body.refreshToken,
+        expiresAt: body.expiresAt,
+        // The pair-claim response doesn't echo email; fetch it via /auth/me
+        // best-effort so the popup shows "as <email>" instead of blank.
+        userEmail: body.user?.email ?? settings.userEmail,
+      },
+      captionStats: null,
+    });
+    // Hydrate user email from /auth/me if pair-claim didn't include it.
+    if (!body.user?.email) {
+      void fetch(`${settings.apiUrl}/v1/auth/me`, {
+        headers: { authorization: `Bearer ${body.accessToken}` },
+      })
+        .then(async (res) => {
+          if (!res.ok) return;
+          const me = (await res.json().catch(() => null)) as {
+            user?: { email?: string };
+          } | null;
+          if (me?.user?.email) {
+            const cur = await getSettings();
+            await writeState({ settings: { ...cur, userEmail: me.user.email } });
+          }
+        })
+        .catch(() => undefined);
+    }
+    void ensureInboxPolling();
+    void pollInbox();
+    void flushBuffers();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'pair-claim failed' };
+  }
 }
 
 /**
@@ -1471,64 +1547,22 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
         sendResponse({ ok: false, error: 'untrusted_sender' });
         return;
       }
-      try {
-        const settings = await getSettings();
-        const r = await fetch(`${settings.apiUrl}/v1/auth/extension/pair-claim`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code: msg.code }),
-        });
-        const body = (await r.json().catch(() => ({}))) as
-          | (LoginResponseBody & { error?: string; message?: string; user?: { email?: string } })
-          | undefined;
-        if (!r.ok || !body?.accessToken) {
-          sendResponse({
-            ok: false,
-            error: body?.message ?? `pair-claim failed (HTTP ${r.status})`,
-          });
-          return;
-        }
-        await writeState({
-          settings: {
-            ...settings,
-            accessToken: body.accessToken,
-            refreshToken: body.refreshToken,
-            expiresAt: body.expiresAt,
-            // The pair-claim response doesn't echo email; fetch it via /auth/me
-            // best-effort so the popup shows "as <email>" instead of blank.
-            userEmail: body.user?.email ?? settings.userEmail,
-          },
-          captionStats: null,
-        });
-        // Hydrate user email from /auth/me if pair-claim didn't include it.
-        if (!body.user?.email) {
-          void fetch(`${settings.apiUrl}/v1/auth/me`, {
-            headers: { authorization: `Bearer ${body.accessToken}` },
-          })
-            .then(async (res) => {
-              if (!res.ok) return;
-              const me = (await res.json().catch(() => null)) as {
-                user?: { email?: string };
-              } | null;
-              if (me?.user?.email) {
-                const cur = await getSettings();
-                await writeState({
-                  settings: { ...cur, userEmail: me.user.email },
-                });
-              }
-            })
-            .catch(() => undefined);
-        }
-        void ensureInboxPolling();
-        void pollInbox();
-        void flushBuffers();
-        sendResponse({ ok: true });
-      } catch (err) {
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : 'pair-claim failed',
-        });
+      sendResponse(await claimPairingCode(msg.code));
+    } else if (msg.type === 'auth.pairFromWeb') {
+      // One-click sign-in: the connect content script forwards the pairing
+      // code the /connect-extension page minted. The sender is a content
+      // script (has a tab), so isPrivilegedSender would reject it — instead
+      // pin the sender's tab to the connect-page origins and re-validate the
+      // code shape before claiming.
+      if (!isConnectContentSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
       }
+      if (!PAIRING_CODE_RE.test(msg.code)) {
+        sendResponse({ ok: false, error: 'bad_code' });
+        return;
+      }
+      sendResponse(await claimPairingCode(msg.code));
     } else if (msg.type === 'auth.logout') {
       if (!isPrivilegedSender(sender)) {
         sendResponse({ ok: false, error: 'untrusted_sender' });

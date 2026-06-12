@@ -195,12 +195,11 @@ function activeCard(
       cap.disabled = true;
       cap.textContent = capturing ? 'Stopping…' : 'Starting…';
       if (!capturing) {
-        try {
-          const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
-          probe.getTracks().forEach((t) => t.stop());
-        } catch {
-          /* continue without mic — tab audio still ships */
-        }
+        // NOTE: no getUserMedia probe here. The old per-start probe re-prompted
+        // for the mic on every capture start (popup prompts are unreliable and
+        // die with the popup). The one-time grant lives on the permission page;
+        // the offscreen worker uses it silently and degrades to tab-only audio
+        // when not granted.
 
         // Mint the tabCapture streamId HERE in the popup. The popup is a
         // valid extension-invocation surface; the SW's onMessage handler
@@ -261,15 +260,39 @@ function activeCard(
   card.appendChild(cap);
 
   if (signedIn) {
+    // Mic button is permission-aware: hidden once granted (the grant persists
+    // for the extension origin, so "every time" prompts were pure UI noise),
+    // shown with the right call-to-action otherwise.
     const grant = document.createElement('button');
     grant.className = 'btn btn-secondary';
     grant.style.marginTop = '6px';
     grant.style.fontSize = '12px';
-    grant.textContent = 'Grant mic permission (one-time)';
+    grant.style.display = 'none';
+    grant.textContent = 'Enable microphone (one-time)';
     grant.addEventListener('click', () => {
       void chrome.tabs.create({ url: chrome.runtime.getURL('permission/index.html') });
     });
     card.appendChild(grant);
+    void navigator.permissions
+      .query({ name: 'microphone' as PermissionName })
+      .then((status) => {
+        const update = (): void => {
+          if (status.state === 'granted') {
+            grant.style.display = 'none';
+            return;
+          }
+          grant.style.display = '';
+          grant.textContent =
+            status.state === 'denied'
+              ? 'Mic blocked — click to fix'
+              : 'Enable microphone (one-time)';
+        };
+        update();
+        status.onchange = update;
+      })
+      .catch(() => {
+        grant.style.display = ''; // can't introspect — keep the button reachable
+      });
   }
 
   if (devMode) {
@@ -307,8 +330,31 @@ function signInCard(initialPrefs: PopupPrefs): HTMLElement {
   help.className = 'muted';
   help.style.fontSize = '11px';
   help.textContent =
-    'Sign in once with your Rocket Sales Agent email + password. The extension will keep itself signed in and ship captions automatically.';
+    'Use the same account as the Rocket web app — Google login included. One click, no codes to copy.';
   card.appendChild(help);
+
+  // ─── Primary path: browser handoff (Fathom-style) ─────────────────────
+  // Opens /connect-extension; the page mints a pairing code under the
+  // user's existing Clerk session (Google included) and hands it straight
+  // to our connect content script. Nothing to type.
+  const browserBtn = document.createElement('button');
+  browserBtn.className = 'btn';
+  browserBtn.textContent = 'Sign in with browser';
+  browserBtn.addEventListener('click', () => {
+    const base = isDevBuild(initialPrefs)
+      ? 'http://localhost:3000'
+      : 'https://rocketsalesagent.com';
+    void chrome.tabs.create({ url: `${base}/connect-extension?source=extension` });
+    window.close();
+  });
+  card.appendChild(browserBtn);
+
+  const divider = document.createElement('div');
+  divider.className = 'muted';
+  divider.style.fontSize = '10px';
+  divider.style.textAlign = 'center';
+  divider.textContent = '— or sign in manually —';
+  card.appendChild(divider);
 
   // ─── Mode toggle: password vs pairing-code ────────────────────────────
   // Google/OAuth signups have no password. They mint a one-time pairing code

@@ -43,6 +43,7 @@ const common = {
 const entries = [
   { entryPoints: ['src/background/index.ts'], outfile: `${outdir}/background/index.js` },
   { entryPoints: ['src/content/index.ts'], outfile: `${outdir}/content/index.js` },
+  { entryPoints: ['src/connect/index.ts'], outfile: `${outdir}/connect/index.js` },
   { entryPoints: ['src/popup/index.ts'], outfile: `${outdir}/popup/index.js` },
   { entryPoints: ['src/offscreen/index.ts'], outfile: `${outdir}/offscreen/index.js` },
   { entryPoints: ['src/permission/index.ts'], outfile: `${outdir}/permission/index.js` },

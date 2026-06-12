@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@clerk/nextjs';
 import { Shell } from '@/components/Shell';
@@ -17,6 +17,12 @@ interface PairError {
 
 type Phase = 'idle' | 'minting' | 'ready' | 'expired' | 'error';
 
+/** Handshake with the extension's connect content script (one-click path). */
+type Handshake = 'searching' | 'detected' | 'delivering' | 'connected' | 'failed';
+
+const FROM_PAGE = 'rocket-connect-page';
+const FROM_EXTENSION = 'rocket-extension';
+
 export default function ConnectExtensionPage() {
   const { isLoaded, isSignedIn } = useAuth();
   const [phase, setPhase] = useState<Phase>('idle');
@@ -25,8 +31,11 @@ export default function ConnectExtensionPage() {
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [handshake, setHandshake] = useState<Handshake>('searching');
+  const [handshakeError, setHandshakeError] = useState<string | null>(null);
+  const autoStarted = useRef(false);
 
-  async function mint(): Promise<void> {
+  async function mint(): Promise<string | null> {
     setPhase('minting');
     setError(null);
     setCopied(false);
@@ -36,17 +45,65 @@ export default function ConnectExtensionPage() {
         const body = (await res.json().catch(() => ({}))) as PairError;
         setError(body.message ?? `Mint failed (HTTP ${res.status})`);
         setPhase('error');
-        return;
+        return null;
       }
       const json = (await res.json()) as PairStartResponse;
       setCode(json.code);
       setExpiresAt(new Date(json.expiresAt));
       setPhase('ready');
+      return json.code;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'mint failed');
       setPhase('error');
+      return null;
     }
   }
+
+  // One-click path: the extension's content script announces itself with
+  // `ready`; we mint a code and post it straight to it — the user types
+  // nothing. If the extension never announces (not installed / old version),
+  // the manual code flow below remains fully functional.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    const onMessage = (event: MessageEvent): void => {
+      if (event.source !== window || event.origin !== window.location.origin) return;
+      const data = event.data as { source?: string; type?: string; ok?: boolean; error?: string };
+      if (!data || data.source !== FROM_EXTENSION) return;
+      if (data.type === 'ready') {
+        setHandshake((h) => (h === 'searching' ? 'detected' : h));
+      } else if (data.type === 'pair-result') {
+        if (data.ok) {
+          setHandshake('connected');
+        } else {
+          setHandshake('failed');
+          setHandshakeError(data.error ?? 'unknown error');
+        }
+      }
+    };
+    window.addEventListener('message', onMessage);
+    // The content script may have announced before we mounted — ping it.
+    window.postMessage({ source: FROM_PAGE, type: 'ping' }, window.location.origin);
+    return () => window.removeEventListener('message', onMessage);
+  }, [isLoaded, isSignedIn]);
+
+  // Extension detected → auto-mint + deliver, exactly once.
+  useEffect(() => {
+    if (handshake !== 'detected' || autoStarted.current) return;
+    autoStarted.current = true;
+    setHandshake('delivering');
+    void mint().then((minted) => {
+      if (!minted) {
+        setHandshake('failed');
+        setHandshakeError('could not mint a pairing code');
+        return;
+      }
+      window.postMessage(
+        { source: FROM_PAGE, type: 'pair', code: minted },
+        window.location.origin,
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handshake]);
 
   // Countdown ticker.
   useEffect(() => {
@@ -118,8 +175,27 @@ export default function ConnectExtensionPage() {
               .
             </p>
           </div>
+        ) : handshake === 'connected' ? (
+          <div className="mt-10 rounded-2xl border border-accent/30 bg-accent/5 p-8 text-center space-y-3">
+            <div className="text-3xl">✓</div>
+            <div className="text-lg font-semibold text-white">Extension connected</div>
+            <p className="text-sm text-white/60">
+              You&apos;re signed in. Close this tab and return to your call — Rocket is ready.
+            </p>
+          </div>
+        ) : handshake === 'delivering' ? (
+          <div className="mt-10 rounded-2xl border border-white/10 bg-ink-900/40 p-8 text-center text-sm text-white/60">
+            Extension detected — signing it in…
+          </div>
         ) : (
         <>
+        {handshake === 'failed' ? (
+          <div className="mt-8 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4 text-sm text-white/70">
+            Automatic sign-in didn&apos;t complete
+            {handshakeError ? <> ({handshakeError})</> : null}. Use the pairing code below
+            instead.
+          </div>
+        ) : null}
         {phase === 'idle' || phase === 'error' ? (
           <div className="mt-10 rounded-2xl border border-white/10 bg-ink-900/40 p-8 text-center">
             <button

@@ -21,6 +21,11 @@ export type RuntimeMessage =
   | { type: 'inbox.markRead'; id: string }
   | { type: 'auth.login'; email: string; password: string; workspaceSlug?: string }
   | { type: 'auth.pair'; code: string }
+  // One-click sign-in: sent by the connect content script when the
+  // admin-web /connect-extension page hands over a freshly minted pairing
+  // code via window.postMessage. Same claim as auth.pair, different trust
+  // gate (content-script sender pinned to the connect-page origin).
+  | { type: 'auth.pairFromWeb'; code: string }
   | { type: 'auth.logout' }
   | { type: 'demo.injectCaptions'; meetingId: string }
   // streamId is minted by the popup via chrome.tabCapture.getMediaStreamId
@@ -182,6 +187,20 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 };
 
 export const MEET_RE = /^https:\/\/meet\.google\.com\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:[/?#].*)?$/i;
+
+/**
+ * Origins whose /connect-extension page may hand pairing codes to the
+ * extension (one-click sign-in). Must stay in lockstep with the
+ * content_scripts matches in manifest.json. localhost is for dev builds —
+ * harmless in prod since the code claim still goes through the api.
+ */
+export const CONNECT_PAGE_ORIGINS = [
+  'https://rocketsalesagent.com',
+  'https://www.rocketsalesagent.com',
+  'http://localhost:3000',
+];
+
+export const PAIRING_CODE_RE = /^ATH-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 
 /**
  * Allowlist of host:port patterns the extension is permitted to talk to.
