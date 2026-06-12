@@ -1,5 +1,12 @@
+'use client';
+
+// Client component: Shell is imported by client pages (connect-extension),
+// so it cannot touch next/headers — locale arrives via LocaleProvider
+// (seeded from the cookie in the root layout, so first paint is correct).
 import Link from 'next/link';
 import { UserButton } from '@clerk/nextjs';
+import { LanguageSwitch } from '@/components/LanguageSwitch';
+import { useDict, useLocale } from '@/lib/i18n/LocaleProvider';
 
 export interface ShellProps {
   email?: string | null;
@@ -8,6 +15,8 @@ export interface ShellProps {
 }
 
 export function Shell({ email, workspace, children }: ShellProps) {
+  const locale = useLocale();
+  const t = useDict();
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-white/5 bg-ink-900/60 backdrop-blur sticky top-0 z-10">
@@ -16,12 +25,13 @@ export function Shell({ email, workspace, children }: ShellProps) {
             Rocket<span className="text-white/60">.</span>
           </Link>
           <nav className="flex gap-4 text-sm text-white/70">
-            <Link href="/dashboard" className="hover:text-white">Dashboard</Link>
-            <Link href="/playbooks" className="hover:text-white">Playbooks</Link>
-            <Link href="/meetings" className="hover:text-white">Meetings</Link>
-            <Link href="/settings" className="hover:text-white">Settings</Link>
+            <Link href="/dashboard" className="hover:text-white">{t.nav.dashboard}</Link>
+            <Link href="/playbooks" className="hover:text-white">{t.nav.playbooks}</Link>
+            <Link href="/meetings" className="hover:text-white">{t.nav.meetings}</Link>
+            <Link href="/settings" className="hover:text-white">{t.nav.settings}</Link>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-white/50">
+            <LanguageSwitch locale={locale} />
             {/* Persistent install CTA — visible on every signed-in page until
                 the Web Store listing publishes. Drives sign-ups straight to
                 the sideload guide where the .zip lives. */}
@@ -35,7 +45,7 @@ export function Shell({ email, workspace, children }: ShellProps) {
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
-              Install extension
+              {t.nav.installExtension}
             </Link>
             {workspace ? <span>{workspace}</span> : null}
             {email ? <span className="hidden md:inline">{email}</span> : null}

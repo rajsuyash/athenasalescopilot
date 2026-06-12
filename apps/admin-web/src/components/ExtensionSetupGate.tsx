@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { dictionaries, type Locale } from '@/lib/i18n/dictionaries';
 
 const FROM_PAGE = 'rocket-connect-page';
 const FROM_EXTENSION = 'rocket-extension';
@@ -23,10 +24,12 @@ type ExtPresence = 'searching' | 'missing' | 'present';
 interface ExtensionSetupGateProps {
   zipHref: string;
   version: string;
+  locale: Locale;
   children: React.ReactNode;
 }
 
-export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetupGateProps) {
+export function ExtensionSetupGate({ zipHref, version, locale, children }: ExtensionSetupGateProps) {
+  const t = dictionaries[locale].gate;
   const [presence, setPresence] = useState<ExtPresence>('searching');
   const [connected, setConnected] = useState<boolean | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -79,10 +82,10 @@ export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetu
     window.postMessage({ source: FROM_PAGE, type: 'ping' }, window.location.origin);
     // Content scripts inject at document_idle — give the announcement a
     // moment before declaring the extension missing.
-    const t = setTimeout(() => setPresence((p) => (p === 'searching' ? 'missing' : p)), 1500);
+    const timer = setTimeout(() => setPresence((p) => (p === 'searching' ? 'missing' : p)), 1500);
     return () => {
       window.removeEventListener('message', onMessage);
-      clearTimeout(t);
+      clearTimeout(timer);
     };
   }, []);
 
@@ -102,8 +105,7 @@ export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetu
       <div>
         <div className="mb-6 flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm text-white/80">
           <span className="text-accent">✓</span>
-          Chrome extension installed &amp; connected (v{version}) — the live coach will join your
-          calls.
+          {t.connectedBanner(version)}
         </div>
         {children}
       </div>
@@ -114,41 +116,38 @@ export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetu
     <div>
       <div className="rounded-xl border border-white/10 bg-ink-800/40 p-6 mb-8">
         <div className="text-xs uppercase tracking-widest text-accent mb-4">
-          Before your first call
+          {t.beforeFirstCall}
         </div>
 
         <ol className="space-y-6">
           {/* Step 1 — install */}
-          <StepRow n={1} done={installDone} active={!installDone} title="Install the Chrome extension">
+          <StepRow n={1} done={installDone} active={!installDone} title={t.step1Title}>
             {installDone ? (
-              <p className="text-sm text-white/60">Installed ✓</p>
+              <p className="text-sm text-white/60">{t.step1Installed}</p>
             ) : (
               <div className="space-y-3">
-                <p className="text-sm text-white/60">
-                  The extension joins your Google Meet calls and powers the live coach. Without it,
-                  nothing you set up below reaches your calls.
-                </p>
+                <p className="text-sm text-white/60">{t.step1Body}</p>
                 <div className="flex flex-wrap items-center gap-3">
                   <a
                     href={zipHref}
                     download
                     className="inline-flex items-center gap-2 rounded-lg bg-accent text-ink-900 font-semibold px-4 py-2 text-xs hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200"
                   >
-                    Download extension (v{version})
+                    {t.download(version)}
                   </a>
                   <Link
                     href="/install"
                     target="_blank"
                     className="text-xs text-accent underline underline-offset-2"
                   >
-                    Step-by-step install guide ↗
+                    {t.installGuide}
                   </Link>
                 </div>
                 <button
                   onClick={() => window.location.reload()}
                   className="text-xs text-white/50 underline underline-offset-2 hover:text-white/80"
                 >
-                  I&apos;ve installed it — check again
+                  {t.checkAgain}
                 </button>
               </div>
             )}
@@ -159,26 +158,24 @@ export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetu
             n={2}
             done={connectDone}
             active={installDone && !connectDone}
-            title="Connect it to your workspace"
+            title={t.step2Title}
           >
             {!installDone ? (
-              <p className="text-sm text-white/40">Waiting for step 1.</p>
+              <p className="text-sm text-white/40">{t.step2Waiting}</p>
             ) : (
               <div className="space-y-2">
-                <p className="text-sm text-white/60">
-                  One click — signs the extension into this workspace. No codes to copy.
-                </p>
+                <p className="text-sm text-white/60">{t.step2Body}</p>
                 <button
                   onClick={() => void connect()}
                   className="inline-flex items-center gap-2 rounded-lg bg-accent text-ink-900 font-semibold px-4 py-2 text-xs hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200"
                 >
-                  Connect extension
+                  {t.connect}
                 </button>
                 {connectError ? (
                   <p className="text-xs text-red-400">
                     {connectError} —{' '}
                     <Link href="/connect-extension" className="underline">
-                      try the pairing-code flow
+                      {t.connectErrorSuffix}
                     </Link>
                     .
                   </p>
@@ -188,11 +185,8 @@ export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetu
           </StepRow>
 
           {/* Step 3 — guided setup */}
-          <StepRow n={3} done={false} active={unlocked} title="Build your playbook (guided setup)">
-            <p className="text-sm text-white/40">
-              Unlocks when the extension is connected. We&apos;ll build your Business Model Canvas,
-              sales script, and objection handling.
-            </p>
+          <StepRow n={3} done={false} active={unlocked} title={t.step3Title}>
+            <p className="text-sm text-white/40">{t.step3Body}</p>
           </StepRow>
         </ol>
 
@@ -201,7 +195,7 @@ export function ExtensionSetupGate({ zipHref, version, children }: ExtensionSetu
             onClick={() => setSkipped(true)}
             className="mt-6 text-xs text-white/40 underline underline-offset-2 hover:text-white/70"
           >
-            Skip for now — set up the extension later
+            {t.skip}
           </button>
         ) : null}
       </div>

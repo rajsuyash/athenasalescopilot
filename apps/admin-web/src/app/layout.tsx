@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
 import { dark } from '@clerk/themes';
+import { LocaleProvider } from '@/lib/i18n/LocaleProvider';
+import { getLocale } from '@/lib/i18n/server';
 import './globals.css';
 
 const jakarta = Plus_Jakarta_Sans({
@@ -32,9 +34,10 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = await getLocale();
   return (
-    <html lang="en" className={`${jakarta.variable} ${mono.variable}`}>
+    <html lang={locale} className={`${jakarta.variable} ${mono.variable}`}>
       <body className="min-h-screen antialiased font-sans" suppressHydrationWarning>
         <ClerkProvider
           appearance={{
@@ -55,7 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             },
           }}
         >
-          {children}
+          <LocaleProvider locale={locale}>{children}</LocaleProvider>
         </ClerkProvider>
       </body>
     </html>

@@ -7,6 +7,7 @@ import { Shell } from '@/components/Shell';
 import { OnboardingWizard } from '@/components/OnboardingWizard';
 import { ExtensionSetupGate } from '@/components/ExtensionSetupGate';
 import extensionMeta from '@/lib/extension-meta.json';
+import { getDict } from '@/lib/i18n/server';
 
 interface MeResponse {
   user: { email: string };
@@ -27,6 +28,7 @@ export default async function OnboardingPage() {
   if (!session) redirect('/signin');
 
   const env = serverEnv();
+  const { locale, t } = await getDict();
   let me: MeResponse;
   try {
     me = await callBackend<MeResponse>({ baseUrl: env.apiUrl, path: '/v1/auth/me' });
@@ -45,20 +47,16 @@ export default async function OnboardingPage() {
     <Shell email={me.user.email} workspace={me.workspace.name}>
       <header className="mb-8">
         <Link href="/dashboard" className="text-xs text-white/40 hover:text-white/70">
-          &larr; Dashboard
+          &larr; {t.onboarding.backToDashboard}
         </Link>
-        <h1 className="text-2xl font-medium tracking-tight mt-2">Get set up</h1>
-        <p className="text-white/60 text-sm mt-1 max-w-2xl">
-          Three steps: install the Chrome extension, connect it to this workspace, then answer a
-          few questions about your business. We turn them into your Business Model Canvas, your
-          probing + pitching script, and your objection handling — so the live coach is ready on
-          your very first call.
-        </p>
+        <h1 className="text-2xl font-medium tracking-tight mt-2">{t.onboarding.title}</h1>
+        <p className="text-white/60 text-sm mt-1 max-w-2xl">{t.onboarding.subtitle}</p>
       </header>
 
       <ExtensionSetupGate
         zipHref={`/downloads/${extensionMeta.zipName}`}
         version={extensionMeta.version}
+        locale={locale}
       >
         <OnboardingWizard initialSections={bmc.data ?? {}} initialVersion={bmc.version ?? 0} />
       </ExtensionSetupGate>

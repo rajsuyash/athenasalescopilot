@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { getDict } from '@/lib/i18n/server';
 
 interface OnboardingBannerProps {
   workspaceName: string;
@@ -9,49 +10,42 @@ interface OnboardingBannerProps {
  * path: /onboarding now opens with the extension install + connect gate,
  * then the guided playbook setup — so a single CTA covers the whole journey.
  */
-export function OnboardingBanner({ workspaceName }: OnboardingBannerProps) {
+export async function OnboardingBanner({ workspaceName }: OnboardingBannerProps) {
+  const { t } = await getDict();
+  const steps = [
+    { title: t.banner.step1Title, body: t.banner.step1Body },
+    { title: t.banner.step2Title, body: t.banner.step2Body },
+    { title: t.banner.step3Title, body: t.banner.step3Body },
+  ];
   return (
     <div className="rounded-xl border border-accent/30 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent p-6 mb-8">
       <div className="text-xs uppercase tracking-widest text-accent mb-2">
-        Welcome to {workspaceName}
+        {t.banner.welcome(workspaceName)}
       </div>
-      <h2 className="text-lg font-medium mb-4">Get to your first coached call</h2>
+      <h2 className="text-lg font-medium mb-4">{t.banner.title}</h2>
 
       <ol className="mb-5 space-y-3 text-sm text-white/80">
-        <li className="flex gap-3 items-center">
-          <Pill n={1} />
-          <span>
-            <strong className="text-white">Install the Chrome extension</strong> — it joins your
-            Google Meet calls and powers the live coach.
-          </span>
-        </li>
-        <li className="flex gap-3 items-center">
-          <Pill n={2} />
-          <span>
-            <strong className="text-white">Connect it</strong> — one click, signs the extension
-            into this workspace.
-          </span>
-        </li>
-        <li className="flex gap-3 items-center">
-          <Pill n={3} />
-          <span>
-            <strong className="text-white">Build your playbook</strong> — a few questions become
-            your canvas, script, and objection handling.
-          </span>
-        </li>
+        {steps.map((s, i) => (
+          <li key={s.title} className="flex gap-3 items-center">
+            <Pill n={i + 1} />
+            <span>
+              <strong className="text-white">{s.title}</strong> {s.body}
+            </span>
+          </li>
+        ))}
       </ol>
 
       <Link
         href="/onboarding"
         className="inline-flex items-center gap-2 rounded-lg bg-accent text-ink-900 font-semibold px-4 py-2 text-xs hover:scale-[1.02] active:scale-[0.98] transition-transform duration-200"
       >
-        <span>Start setup (~5 minutes)</span>
+        <span>{t.banner.cta}</span>
         <Arrow />
       </Link>
       <p className="mt-3 text-xs text-white/50">
-        Prefer manual setup? Upload docs on{' '}
-        <Link href="/knowledge" className="underline">Knowledge</Link> · install guide on{' '}
-        <Link href="/install" className="underline">/install</Link>.
+        {t.banner.manual}{' '}
+        <Link href="/knowledge" className="underline">{t.banner.manualKnowledge}</Link> ·{' '}
+        <Link href="/install" className="underline">{t.banner.manualInstall}</Link>.
       </p>
     </div>
   );
