@@ -37,12 +37,14 @@ const metaPath = path.join(repoRoot, 'apps/admin-web/src/lib/extension-meta.json
 const manifest = JSON.parse(fs.readFileSync(path.join(extRoot, 'src/manifest.json'), 'utf8'));
 
 /**
- * Prod API/gateway URLs come from manifest host_permissions — the extension
- * can only call hosts listed there, so they are the single source of truth.
- * Env vars still win when set (e.g. pointing a test build at staging).
+ * Prod API/gateway URLs come from manifest host_permissions ONLY — the
+ * extension can only call hosts listed there, so they are the single source
+ * of truth. Deliberately NO env override: Railway injects service-internal
+ * env vars (ATHENA_API_URL=http://athena-api.railway.internal:4000) into the
+ * admin-web build, and honoring them baked an internet-unreachable URL into
+ * the shipped zip (caught in the 0.1.21 deploy log).
  */
-function hostUrl(matcher, envName) {
-  if (process.env[envName]) return process.env[envName];
+function hostUrl(matcher) {
   const entry = (manifest.host_permissions ?? []).find(
     (h) => h.startsWith('https://') && h.includes(matcher),
   );
@@ -55,8 +57,8 @@ function hostUrl(matcher, envName) {
 
 const env = {
   ...process.env,
-  ATHENA_API_URL: hostUrl('athena-api', 'ATHENA_API_URL'),
-  ATHENA_GATEWAY_URL: hostUrl('athena-realtime', 'ATHENA_GATEWAY_URL'),
+  ATHENA_API_URL: hostUrl('athena-api'),
+  ATHENA_GATEWAY_URL: hostUrl('athena-realtime'),
 };
 const version = manifest.version;
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
