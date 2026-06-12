@@ -34,6 +34,15 @@ window.addEventListener('message', (event: MessageEvent) => {
     postToPage({ type: 'ready', version: chrome.runtime.getManifest().version });
     return;
   }
+  if (data.type === 'status') {
+    void chrome.runtime
+      .sendMessage({ type: 'auth.statusForWeb' } satisfies RuntimeMessage)
+      .then((resp: { ok?: boolean; signedIn?: boolean } | undefined) => {
+        postToPage({ type: 'status-result', signedIn: !!resp?.signedIn });
+      })
+      .catch(() => postToPage({ type: 'status-result', signedIn: false }));
+    return;
+  }
   if (data.type !== 'pair') return;
   const code = typeof data.code === 'string' ? data.code.trim().toUpperCase() : '';
   if (!PAIRING_CODE_RE.test(code)) {

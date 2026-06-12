@@ -5,6 +5,8 @@ import { serverEnv } from '@/lib/env';
 import { getSession } from '@/lib/session';
 import { Shell } from '@/components/Shell';
 import { OnboardingWizard } from '@/components/OnboardingWizard';
+import { ExtensionSetupGate } from '@/components/ExtensionSetupGate';
+import extensionMeta from '@/lib/extension-meta.json';
 
 interface MeResponse {
   user: { email: string };
@@ -45,15 +47,21 @@ export default async function OnboardingPage() {
         <Link href="/dashboard" className="text-xs text-white/40 hover:text-white/70">
           &larr; Dashboard
         </Link>
-        <h1 className="text-2xl font-medium tracking-tight mt-2">Guided setup</h1>
+        <h1 className="text-2xl font-medium tracking-tight mt-2">Get set up</h1>
         <p className="text-white/60 text-sm mt-1 max-w-2xl">
-          Answer a few questions about your business. We turn them into your Business Model Canvas,
-          then use it to write your probing + pitching script and pre-build the objections
-          you&apos;ll face — so the live coach is ready on your very first call.
+          Three steps: install the Chrome extension, connect it to this workspace, then answer a
+          few questions about your business. We turn them into your Business Model Canvas, your
+          probing + pitching script, and your objection handling — so the live coach is ready on
+          your very first call.
         </p>
       </header>
 
-      <OnboardingWizard initialSections={bmc.data ?? {}} initialVersion={bmc.version ?? 0} />
+      <ExtensionSetupGate
+        zipHref={`/downloads/${extensionMeta.zipName}`}
+        version={extensionMeta.version}
+      >
+        <OnboardingWizard initialSections={bmc.data ?? {}} initialVersion={bmc.version ?? 0} />
+      </ExtensionSetupGate>
     </Shell>
   );
 }

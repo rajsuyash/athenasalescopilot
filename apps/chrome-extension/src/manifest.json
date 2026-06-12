@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Athena Companion",
   "short_name": "Athena",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "Real-time sales coach for Google Meet. Captures call audio, transcribes, and surfaces grounded answers in the Meet tab.",
   "author": "Athena",
   "homepage_url": "https://athena-admin-web-production.up.railway.app",
@@ -47,7 +47,10 @@
       "matches": [
         "https://rocketsalesagent.com/connect-extension*",
         "https://www.rocketsalesagent.com/connect-extension*",
-        "http://localhost/connect-extension*"
+        "https://rocketsalesagent.com/onboarding*",
+        "https://www.rocketsalesagent.com/onboarding*",
+        "http://localhost/connect-extension*",
+        "http://localhost/onboarding*"
       ],
       "js": ["connect/index.js"],
       "run_at": "document_idle"

@@ -26,6 +26,10 @@ export type RuntimeMessage =
   // code via window.postMessage. Same claim as auth.pair, different trust
   // gate (content-script sender pinned to the connect-page origin).
   | { type: 'auth.pairFromWeb'; code: string }
+  // Connect/onboarding pages ask "is the extension already signed in?" so
+  // they can render install → connect → done steps accurately. Response is
+  // a single boolean — no tokens, no email.
+  | { type: 'auth.statusForWeb' }
   | { type: 'auth.logout' }
   | { type: 'demo.injectCaptions'; meetingId: string }
   // streamId is minted by the popup via chrome.tabCapture.getMediaStreamId
