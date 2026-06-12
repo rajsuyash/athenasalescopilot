@@ -9,8 +9,13 @@
 import { auth } from '@clerk/nextjs/server';
 
 export interface SessionData {
-  /** Short-lived JWT signed by Clerk. Pass as Bearer to backend services
-   *  that have the @clerk/backend verifier wired up. */
+  /**
+   * Short-lived JWT signed by Clerk (RS256). ONLY the api service verifies
+   * these (via its preVerify hook) — every other backend service rejects them
+   * with FAST_JWT_INVALID_ALGORITHM. For backend calls use
+   * `getBackendBearer()` from lib/api.ts, which exchanges this for the HMAC
+   * token all services accept. Use this field only for Clerk-facing needs.
+   */
   accessToken: string;
   /** Stable Clerk user id (e.g. user_2abc...). */
   userId: string;
@@ -19,7 +24,6 @@ export interface SessionData {
 export async function getSession(): Promise<SessionData | null> {
   const a = await auth();
   if (!a.userId) return null;
-  // Clerk JWT — backend services verify against Clerk's JWKS.
   const token = await a.getToken();
   if (!token) return null;
   return { accessToken: token, userId: a.userId };

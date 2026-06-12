@@ -103,4 +103,42 @@ describe('api server', () => {
     const res = await app.inject({ method: 'GET', url: '/v1/no-such-thing' });
     assert.equal(res.statusCode, 404);
   });
+
+  it('rejects /auth/token without a token', async () => {
+    const res = await app.inject({ method: 'POST', url: '/v1/auth/token' });
+    assert.equal(res.statusCode, 401);
+  });
+
+  it('exchanges a verified identity for a short-lived HMAC access token', async () => {
+    const bearer = signer.jwt.sign({
+      sub: 'u_1',
+      workspaceId: 'ws_1',
+      role: 'rep',
+      membershipId: 'm_1',
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/token',
+      headers: { authorization: `Bearer ${bearer}` },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as { accessToken: string };
+    assert.ok(body.accessToken);
+
+    // The minted token must verify under the shared HMAC secret, carry the
+    // same tenant claims, and expire (the whole point: a token every
+    // downstream service accepts, unlike the Clerk RS256 session JWT).
+    const claims = signer.jwt.verify<{
+      sub: string;
+      workspaceId: string;
+      role: string;
+      membershipId: string;
+      exp: number;
+    }>(body.accessToken);
+    assert.equal(claims.sub, 'u_1');
+    assert.equal(claims.workspaceId, 'ws_1');
+    assert.equal(claims.role, 'rep');
+    assert.equal(claims.membershipId, 'm_1');
+    assert.ok(claims.exp > Math.floor(Date.now() / 1000));
+  });
 });

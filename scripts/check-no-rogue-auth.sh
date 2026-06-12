@@ -75,6 +75,17 @@ while IFS= read -r file; do
   violations=1
 done < <(git ls-files 'services/*/src/lib/auth.ts' 'services/*/src/plugins/auth.ts' 2>/dev/null || true)
 
+# 4. Admin-web proxy routes must never forward the raw Clerk session token to
+#    a backend service — only the api verifies Clerk JWTs; every other service
+#    rejects them with FAST_JWT_INVALID_ALGORITHM (2026-06-12 wizard incident).
+#    Backend calls go through lib/api.ts (getBackendBearer / callBackend /
+#    backendFetch / forwardUpload), which exchanges Clerk → HMAC at the api.
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  echo "ROGUE AUTH: $file forwards session.accessToken (a Clerk JWT) to a backend — use getBackendBearer() from lib/api.ts."
+  violations=1
+done < <(git grep -l 'session\.accessToken' -- 'apps/admin-web/src/app/api' 2>/dev/null || true)
+
 if [ "$violations" -ne 0 ]; then
   echo ""
   echo "Auth classification must live ONLY in @athena/auth. See docs/incidents/2026-06-04-token-expired-meeting-start.md"

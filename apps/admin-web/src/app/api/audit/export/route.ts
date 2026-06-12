@@ -1,10 +1,10 @@
 import { serverEnv } from '@/lib/env';
-import { getSession } from '@/lib/session';
+import { getBackendBearer } from '@/lib/api';
 
 export async function GET(req: Request): Promise<Response> {
   const env = serverEnv();
-  const session = await getSession();
-  if (!session) {
+  const bearer = await getBackendBearer();
+  if (!bearer) {
     return new Response(JSON.stringify({ error: 'UNAUTHENTICATED' }), {
       status: 401,
       headers: { 'content-type': 'application/json' },
@@ -12,7 +12,7 @@ export async function GET(req: Request): Promise<Response> {
   }
   const url = new URL(req.url);
   const upstream = await fetch(`${env.apiUrl}/v1/audit/export?${url.searchParams.toString()}`, {
-    headers: { authorization: `Bearer ${session.accessToken}` },
+    headers: { authorization: `Bearer ${bearer}` },
   });
   // Pass through content-type + content-disposition so the browser downloads.
   const headers = new Headers();

@@ -1,14 +1,20 @@
 /**
  * Server-side fetcher to backend services. After Block T, identity is owned
- * by Clerk: we ask Clerk for a fresh JWT on every call (Clerk handles
- * rotation internally) and forward it as the Bearer token. The backend
- * services verify these JWTs against Clerk's JWKS.
+ * by Clerk — but ONLY the api service verifies Clerk session JWTs (via its
+ * preVerify hook). Every other service (knowledge, analytics, billing, …)
+ * verifies HMAC HS256 tokens exclusively, so forwarding a Clerk RS256 JWT to
+ * them fails with FAST_JWT_INVALID_ALGORITHM (2026-06-12 incident).
  *
- * No more refresh-token bookkeeping. Clerk's session is rotated client-side
- * by their middleware; expired tokens auto-redirect to /signin via the same
+ * getBackendBearer therefore exchanges the Clerk session JWT at the api's
+ * POST /v1/auth/token for a short-lived HMAC access token accepted by every
+ * service, cached per user until shortly before expiry.
+ *
+ * No refresh-token bookkeeping. Clerk's session is rotated client-side by
+ * their middleware; expired sessions auto-redirect to /signin via the same
  * middleware before requests reach this code.
  */
 import { auth } from '@clerk/nextjs/server';
+import { serverEnv } from './env';
 
 interface CallOpts {
   baseUrl: string;
@@ -31,10 +37,78 @@ export class ApiError extends Error {
   }
 }
 
-async function getBearer(): Promise<string | null> {
+/** Re-exchange this many seconds before the cached token's exp. */
+const TOKEN_REFRESH_MARGIN_S = 60;
+
+interface CachedToken {
+  token: string;
+  /** Unix epoch seconds. */
+  expiresAt: number;
+}
+
+/**
+ * Per-user cache of exchanged HMAC tokens (module-level: one map per server
+ * instance, which is fine — a cold instance just re-exchanges once).
+ */
+const tokenCache = new Map<string, CachedToken>();
+
+function jwtExpSeconds(token: string): number {
+  try {
+    const payloadB64 = token.split('.')[1] ?? '';
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as {
+      exp?: unknown;
+    };
+    return typeof payload.exp === 'number' ? payload.exp : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function pruneExpiredTokens(nowSeconds: number): void {
+  for (const [userId, entry] of tokenCache) {
+    if (entry.expiresAt <= nowSeconds) tokenCache.delete(userId);
+  }
+}
+
+/**
+ * Bearer for backend service calls. Exported for the few proxy routes that
+ * stream raw requests/responses and can't go through callBackend/backendFetch
+ * (multipart import, file export). NEVER forward a Clerk session token to a
+ * backend service instead of this — only the api verifies Clerk tokens.
+ */
+export async function getBackendBearer(): Promise<string | null> {
   const a = await auth();
   if (!a.userId) return null;
-  return a.getToken();
+
+  const nowSeconds = Date.now() / 1000;
+  const cached = tokenCache.get(a.userId);
+  if (cached && cached.expiresAt - TOKEN_REFRESH_MARGIN_S > nowSeconds) {
+    return cached.token;
+  }
+
+  const clerkToken = await a.getToken();
+  if (!clerkToken) return null;
+
+  // Exchange the Clerk RS256 session JWT for the HMAC token every backend
+  // service verifies. Only the api understands Clerk tokens.
+  const res = await fetch(`${serverEnv().apiUrl}/v1/auth/token`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${clerkToken}` },
+    cache: 'no-store',
+  });
+  if (res.status === 401 || res.status === 403) return null; // treated as signed-out
+  if (!res.ok) {
+    throw new ApiError(502, 'TOKEN_EXCHANGE_FAILED', `token exchange HTTP ${res.status}`);
+  }
+  const body = (await res.json().catch(() => null)) as { accessToken?: unknown } | null;
+  const accessToken = typeof body?.accessToken === 'string' ? body.accessToken : null;
+  if (!accessToken) {
+    throw new ApiError(502, 'TOKEN_EXCHANGE_FAILED', 'token exchange returned no accessToken');
+  }
+
+  pruneExpiredTokens(nowSeconds);
+  tokenCache.set(a.userId, { token: accessToken, expiresAt: jwtExpSeconds(accessToken) });
+  return accessToken;
 }
 
 async function doFetch(opts: CallOpts, bearer: string | null): Promise<Response> {
@@ -54,7 +128,7 @@ async function doFetch(opts: CallOpts, bearer: string | null): Promise<Response>
 export async function callBackend<T = unknown>(opts: CallOpts): Promise<T> {
   let bearer: string | null = null;
   if (opts.auth !== 'none') {
-    bearer = await getBearer();
+    bearer = await getBackendBearer();
     if (!bearer) throw new ApiError(401, 'UNAUTHENTICATED', 'no session');
   }
   const res = await doFetch(opts, bearer);
@@ -83,7 +157,7 @@ export async function callBackend<T = unknown>(opts: CallOpts): Promise<T> {
 }
 
 /**
- * Raw forwarder: same Clerk-bearer attachment as callBackend, but returns the
+ * Raw forwarder: same bearer attachment as callBackend, but returns the
  * untouched Response so the caller can read a streaming body (e.g. the BMC
  * builder's Server-Sent Events). callBackend assumes a JSON body and would
  * consume the stream, so SSE proxies use this instead.
@@ -91,7 +165,7 @@ export async function callBackend<T = unknown>(opts: CallOpts): Promise<T> {
 export async function backendFetch(opts: CallOpts): Promise<Response> {
   let bearer: string | null = null;
   if (opts.auth !== 'none') {
-    bearer = await getBearer();
+    bearer = await getBackendBearer();
     if (!bearer) {
       return new Response(JSON.stringify({ error: 'UNAUTHENTICATED', message: 'no session' }), {
         status: 401,
@@ -111,7 +185,7 @@ export async function forwardUpload(
   path: string,
   form: FormData,
 ): Promise<Response> {
-  const bearer = await getBearer();
+  const bearer = await getBackendBearer();
   if (!bearer) {
     return new Response(JSON.stringify({ error: 'UNAUTHENTICATED' }), { status: 401 });
   }

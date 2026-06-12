@@ -211,6 +211,36 @@ export function authRoutes(deps: AuthDeps) {
       },
     );
 
+    /**
+     * POST /v1/auth/token
+     * Exchange any identity requireAuth accepts (Clerk session JWT via
+     * preVerify, or an existing HMAC token) for a short-lived HMAC access
+     * token. Every backend service verifies HMAC only — Clerk stays exclusive
+     * to the api — so admin-web calls this and uses the result against
+     * knowledge/analytics/billing/etc. No refresh token is minted: callers
+     * re-exchange their Clerk session when this expires.
+     */
+    app.post(
+      '/auth/token',
+      {
+        config: {
+          // Keyed per-IP; admin-web is one server IP serving many users, so
+          // this must comfortably exceed one-exchange-per-user-per-TTL.
+          rateLimit: { max: 300, timeWindow: '1 minute' },
+        },
+      },
+      async (req) => {
+        const claims = await req.requireAuth();
+        const accessToken = app.jwt.sign({
+          sub: claims.sub,
+          workspaceId: claims.workspaceId,
+          role: claims.role,
+          membershipId: claims.membershipId,
+        });
+        return { accessToken };
+      },
+    );
+
     app.get('/auth/me', async (req) => {
       const claims = await req.requireAuth();
       const me = await prisma.user.findUniqueOrThrow({

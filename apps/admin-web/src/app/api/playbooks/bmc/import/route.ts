@@ -3,12 +3,12 @@
  * knowledge-service so we don't buffer 50 MB PDFs in the admin-web layer.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/session';
+import { getBackendBearer } from '@/lib/api';
 import { serverEnv } from '@/lib/env';
 
 export async function POST(req: Request): Promise<Response> {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'UNAUTHENTICATED' }, { status: 401 });
+  const bearer = await getBackendBearer();
+  if (!bearer) return NextResponse.json({ error: 'UNAUTHENTICATED' }, { status: 401 });
   const env = serverEnv();
   const url = `${env.knowledgeUrl}/v1/playbooks/bmc/import`;
   const contentType = req.headers.get('content-type') ?? 'multipart/form-data';
@@ -16,7 +16,7 @@ export async function POST(req: Request): Promise<Response> {
   const upstream = await fetch(url, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${session.accessToken}`,
+      authorization: `Bearer ${bearer}`,
       'content-type': contentType,
     },
     body: req.body,
