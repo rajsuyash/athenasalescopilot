@@ -5,7 +5,6 @@
  */
 import {
   DEFAULT_SETTINGS,
-  MEET_RE,
   isAllowedApiUrl,
   isAllowedGatewayUrl,
   type AccountInfo,
@@ -21,6 +20,7 @@ import {
 } from '../shared/types.js';
 import { log } from '../shared/log.js';
 import { needsRefresh, classifyRefreshHttpFailure, deriveAuthState } from './auth-logic.js';
+import { adoptMeetTab, isActiveTabHealthy, parseMeetUrl } from './meeting-logic.js';
 
 /**
  * Trust boundary: any chrome.runtime.onMessage handler is reachable by
@@ -388,12 +388,38 @@ async function signedFetch(url: string, init: RequestInit = {}): Promise<Respons
   return doFetch(headers);
 }
 
-function parseMeetUrl(url: string | undefined): { meetingId: string; meetingUrl: string } | null {
-  if (!url) return null;
-  const m = MEET_RE.exec(url);
-  if (!m || !m[1]) return null;
-  return { meetingId: m[1], meetingUrl: `https://meet.google.com/${m[1]}` };
+/**
+ * Self-heal the persisted active meeting before anyone relies on it.
+ *
+ * The active record lives in storage.local and survives browser restarts, SW
+ * kills, and extension updates — but tab ids do NOT. A stale record made
+ * tabCapture.getMediaStreamId fail with "Invalid tab specified" AND (via the
+ * first-one-wins guard) blocked every NEW meeting from ever becoming active,
+ * permanently wedging the extension (2026-06-12 incident).
+ *
+ * Returns the verified-or-adopted active meeting, clearing capture/state for
+ * a dead one and adopting a live Meet tab when present.
+ */
+async function reconcileActive(): Promise<ActiveMeeting | null> {
+  const active = await getActive();
+  if (active) {
+    const tab = await chrome.tabs.get(active.tabId).catch(() => null);
+    if (tab && isActiveTabHealthy(active, tab.url)) return active;
+    await stopCapture('stale_tab').catch(() => undefined);
+    await setActive(null);
+  }
+  // Adopt a live Meet tab if one exists — covers detection events missed
+  // while the SW was dead (browser restart, extension update).
+  const tabs = await chrome.tabs
+    .query({ url: 'https://meet.google.com/*' })
+    .catch(() => [] as chrome.tabs.Tab[]);
+  const adopted = adoptMeetTab(tabs, new Date().toISOString());
+  if (adopted) await setActive(adopted);
+  return adopted;
 }
+
+chrome.runtime.onStartup.addListener(() => void reconcileActive().catch(() => undefined));
+chrome.runtime.onInstalled.addListener(() => void reconcileActive().catch(() => undefined));
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!changeInfo.url && !changeInfo.title) return;
@@ -408,8 +434,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     internalMeetingId: null,
   };
   const current = await getActive();
-  // Don't clobber another already-attached Meet — first one wins (PRD F1 AC3).
-  if (current && current.meetingId !== next.meetingId) return;
+  if (current && current.meetingId !== next.meetingId) {
+    // Don't clobber another already-attached Meet — first one wins (PRD F1
+    // AC3) — but ONLY while that meeting is actually alive. A dead record
+    // must never block a new call (the 2026-06-12 wedge).
+    // (If reconcile adopted next's own tab, returning is equally correct.)
+    const verified = await reconcileActive();
+    if (verified) return;
+  }
   await setActive(next);
 });
 
@@ -1327,6 +1359,10 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
         sendResponse({ ok: false, error: 'untrusted_sender' });
         return;
       }
+      // Self-heal stale active state FIRST — the popup mints the tabCapture
+      // streamId from active.tabId, so a dead tab here means "Invalid tab
+      // specified" on Start. Reconciling at read time fixes it for free.
+      await reconcileActive().catch(() => undefined);
       const state = await readState();
       sendResponse(buildPopupQueryResponse(state));
     } else if (msg.type === 'capture.start') {
