@@ -78,7 +78,10 @@ function isConnectContentSender(sender: chrome.runtime.MessageSender): boolean {
   const url = sender.url ?? sender.tab.url ?? '';
   try {
     const u = new URL(url);
-    return CONNECT_PAGE_ORIGINS.includes(u.origin) && u.pathname.startsWith('/connect-extension');
+    return (
+      CONNECT_PAGE_ORIGINS.includes(u.origin) &&
+      (u.pathname.startsWith('/connect-extension') || u.pathname.startsWith('/onboarding'))
+    );
   } catch {
     return false;
   }
@@ -728,7 +731,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       const lastFinal = await readLastFinalAt();
       if (!lastFinal) return;
       if (Date.now() - lastFinal >= SILENCE_TIMEOUT_MS) {
-        await stopCapture('silence_30s');
+        await stopCapture(SILENCE_STOP_REASON);
       }
     })();
   }
@@ -907,7 +910,12 @@ async function startCapture(streamId: string): Promise<{ ok: boolean; error?: st
 // a muted call, so we can't trust `shipped`. The watchdog alarm is a backstop
 // in case offscreen.update goes quiet too.
 const SILENCE_ALARM = 'athena-silence-watchdog';
-const SILENCE_TIMEOUT_MS = 30_000;
+// 120s: real calls have long quiet stretches (screen-shares, prospect
+// reading, demos) — 30s killed live captures mid-call (user report
+// 2026-06-12). The reason string carries the window so support can tell
+// which build produced a stop.
+const SILENCE_TIMEOUT_MS = 120_000;
+const SILENCE_STOP_REASON = 'silence_120s';
 const SILENCE_LAST_FINAL_KEY = 'silence.lastFinalAt';
 
 async function noteFinalHeard(): Promise<void> {
@@ -923,9 +931,9 @@ async function readLastFinalAt(): Promise<number> {
 async function startSilenceWatchdog(): Promise<void> {
   // Seed so a brand-new capture gets the full grace window before triggering.
   await noteFinalHeard();
-  // 30s period is the MV3 floor; combined with the inline check on each
-  // offscreen.update this gives sub-second detection during normal traffic
-  // and 30-60s worst-case detection if updates also stop arriving.
+  // 30s alarm period is the MV3 floor; combined with the inline check on
+  // each offscreen.update this gives sub-second detection during normal
+  // traffic and timeout+30s worst-case if updates also stop arriving.
   await chrome.alarms.create(SILENCE_ALARM, {
     periodInMinutes: 0.5,
     when: Date.now() + SILENCE_TIMEOUT_MS,
@@ -1015,11 +1023,11 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
       await noteFinalHeard();
       return;
     }
-    // Inline backstop: if updates keep arriving but no new finals for >=30s,
-    // stop now without waiting for the alarm.
+    // Inline backstop: if updates keep arriving but no new finals for the
+    // full silence window, stop now without waiting for the alarm.
     const lastFinal = await readLastFinalAt();
     if (lastFinal && Date.now() - lastFinal >= SILENCE_TIMEOUT_MS) {
-      await stopCapture('silence_30s');
+      await stopCapture(SILENCE_STOP_REASON);
     }
   })();
 });
@@ -1563,6 +1571,21 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse)
         return;
       }
       sendResponse(await claimPairingCode(msg.code));
+    } else if (msg.type === 'auth.statusForWeb') {
+      // Boolean-only status for the connect/onboarding pages' step UI. No
+      // tokens or identity ever cross this boundary.
+      if (!isConnectContentSender(sender)) {
+        sendResponse({ ok: false, error: 'untrusted_sender' });
+        return;
+      }
+      const settings = await getSettings();
+      const state = deriveAuthState({
+        accessToken: settings.accessToken,
+        refreshToken: settings.refreshToken,
+        expiresAt: settings.expiresAt,
+        now: Date.now(),
+      });
+      sendResponse({ ok: true, signedIn: state !== 'signed-out' });
     } else if (msg.type === 'auth.logout') {
       if (!isPrivilegedSender(sender)) {
         sendResponse({ ok: false, error: 'untrusted_sender' });
