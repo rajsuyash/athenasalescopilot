@@ -8,7 +8,13 @@ export interface SttSegment {
   isFinal: boolean;
   /** Speaker label from diarization. Stable across the session. */
   speakerLabel: string;
-  /** Heuristic mapping of speaker → rep/customer/unknown (set by stream consumer). */
+  /**
+   * Audio channel this segment came from, when multichannel is enabled
+   * (0-based). With dual-channel capture (tab=0, mic=1) this gives
+   * deterministic rep/customer attribution without trusting diarization.
+   * Undefined for mono streams.
+   */
+  channelIndex?: number;
   language: string;
 }
 
@@ -29,6 +35,12 @@ export interface OpenStreamOpts {
   /** Sample rate of the PCM frames you'll push. */
   sampleRate?: number;
   channels?: number;
+  /**
+   * Transcribe each channel independently and tag segments with
+   * `channelIndex`. Requires interleaved multi-channel PCM. Used for
+   * deterministic rep/customer split (tab audio on ch0, mic on ch1).
+   */
+  multichannel?: boolean;
   encoding?: 'linear16' | 'opus';
 }
 
