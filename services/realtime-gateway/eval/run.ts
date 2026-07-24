@@ -8,7 +8,7 @@
  *      utterances, does the live urgency gate (classifyHeuristic urgencyScore
  *      >= URGENCY_THRESHOLD) let the turn through to the LLM? This is the gate
  *      that once suppressed 98/98 turns; a regex/threshold regression shows up
- *      here. English + French; FR is informational (English-only regex, F20).
+ *      here. English + French — both gated (FR patterns added in F20-FR).
  *   2. Objection-loop state machine — walks scripted episodes through
  *      reconcileEpisode end-to-end and asserts every transition.
  *   3. Retrieval ordering — mergeObjectionFirst keeps objection chunks first.
@@ -44,9 +44,11 @@ const URGENCY_THRESHOLD = Number(process.env.URGENCY_THRESHOLD ?? 0.35);
 // objections bypass the urgency gate (isObjection) and widening the objection
 // patterns. Gate is set with headroom below current so new fixtures can be
 // added without instantly failing, but a real regression trips it. FR is still
-// English-only (~10%) — informational until FR intent lands (F20-FR).
+// FR intent (F20-FR) added French objection patterns, taking FR recall from
+// ~10% to ~100% — now gated too.
 const EN_RECALL_GATE = 0.9;
 const EN_RECALL_TARGET = 0.95;
+const FR_RECALL_GATE = 0.85;
 const EPISODE_GATE = 1.0;
 
 interface ObjectionItem {
@@ -98,9 +100,16 @@ const enRecall = enTotal === 0 ? 0 : enHit / enTotal;
 console.log(
   `\n  EN recall: ${pct(enHit, enTotal)} (${enHit}/${enTotal})   [baseline gate ${Math.round(EN_RECALL_GATE * 100)}%, target ${Math.round(EN_RECALL_TARGET * 100)}% via F20]`,
 );
+const frRecall = frTotal === 0 ? 0 : frHit / frTotal;
 console.log(
-  `  FR recall: ${pct(frHit, frTotal)} (${frHit}/${frTotal})   [informational — English-only regex, F20]`,
+  `  FR recall: ${pct(frHit, frTotal)} (${frHit}/${frTotal})   [gate ${Math.round(FR_RECALL_GATE * 100)}%]`,
 );
+if (frRecall < FR_RECALL_GATE) {
+  console.log(
+    `\n  ✖ FR recall ${pct(frHit, frTotal)} below gate ${Math.round(FR_RECALL_GATE * 100)}% — REGRESSION`,
+  );
+  failed = true;
+}
 if (misses.length > 0) {
   console.log('\n  EN misses (would NOT reach the coach):');
   for (const m of misses) console.log(`    [${m.archetype}] "${m.text}"`);
