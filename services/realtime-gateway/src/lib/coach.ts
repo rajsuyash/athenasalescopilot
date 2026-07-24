@@ -501,6 +501,20 @@ export type LoopStep = (typeof LOOP_STEPS)[number];
  *  to plain answer/coach mode (per the skill's "If they deflect" guidance). */
 const MAX_DEFLECTIONS = 2;
 
+/** Last retrieval result per meeting, reused on mid-episode turns so the
+ *  objection loop's follow-up steps skip the embed+pgvector round trips
+ *  (~200-400ms). Cleared when the episode closes; size-capped as a leak guard
+ *  for meetings that never end cleanly. */
+const episodeChunkCache = new Map<string, RetrievedChunk[]>();
+const EPISODE_CHUNK_CACHE_MAX = 500;
+function cacheEpisodeChunks(meetingId: string, chunks: RetrievedChunk[]): void {
+  if (episodeChunkCache.size >= EPISODE_CHUNK_CACHE_MAX) {
+    const oldest = episodeChunkCache.keys().next().value;
+    if (oldest) episodeChunkCache.delete(oldest);
+  }
+  episodeChunkCache.set(meetingId, chunks);
+}
+
 /** In-memory episode state the handler threads across turns for one meeting. */
 export interface EpisodeState {
   id: string;
@@ -984,7 +998,7 @@ export async function proactiveCoach(
     schema: ProactiveSchema,
     temperature: 0.3,
     maxTokens: 200,
-    deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 12000),
+    deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 8000),
   });
   emitLatency({
     workspaceId: input.workspaceId,
@@ -1118,6 +1132,10 @@ export interface CoachInput {
    *  prompt (don't repeat / don't re-ask what was answered) and checked
    *  post-hoc — a duplicate is suppressed instead of displayed. */
   recentSuggestions?: string[];
+  /** Resolves when the Turn row insert has committed. The handler fires the
+   *  insert without blocking the coach; we only await it right before the
+   *  suggestion insert (FK on turns) — by then it has long committed. */
+  turnReady?: Promise<void>;
 }
 
 export interface CoachOutput {
@@ -1263,6 +1281,7 @@ async function applyEpisodeDecision(
       };
     }
     case 'close': {
+      episodeChunkCache.delete(input.meetingId);
       if (prior) {
         await prisma.objectionEpisode.update({
           where: { id: prior.id },
@@ -1310,23 +1329,34 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
 
   const cat = intent.categories.find((c) => c !== 'none') ?? null;
   const tRetrieval = Date.now();
+  // Mid-episode fast path: while working an open objection loop, the grounding
+  // chunks were already retrieved when the objection opened — the loop's
+  // justify/consequence/close turns don't need a fresh embed (~150-300ms
+  // OpenAI round trip) + pgvector pass. Reuse the episode's chunks unless the
+  // prospect asked a new question (fresh info need → fresh retrieval).
+  const cachedChunks =
+    input.openEpisode && !input.customerText.includes('?')
+      ? episodeChunkCache.get(input.meetingId)
+      : undefined;
   // Phase 2.1: retrieve() and getActiveScriptForStage() are independent DB
   // operations — both are needed for the LLM call but neither depends on
   // the other. Running in parallel saves the script-fetch round-trip
   // (~30-100ms depending on cache state) on every coached turn.
   const [chunks, scriptBody, businessContext] = await Promise.all([
-    retrieve(
-      input.workspaceId,
-      input.customerText,
-      deps.embeddings,
-      intent.categories,
-      input.language ?? null,
-    ),
+    cachedChunks ??
+      retrieve(
+        input.workspaceId,
+        input.customerText,
+        deps.embeddings,
+        intent.categories,
+        input.language ?? null,
+      ),
     deps.llm
       ? getActiveScriptForStage(input.workspaceId, intent.stageSignal)
       : Promise.resolve(null),
     deps.llm ? getBusinessContext(input.workspaceId) : Promise.resolve(null),
   ]);
+  if (!cachedChunks && chunks.length > 0) cacheEpisodeChunks(input.meetingId, chunks);
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
@@ -1397,7 +1427,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       schema: SuggestSchema,
       temperature: 0.2,
       maxTokens: 400,
-      deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 12000),
+      deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 8000),
       // Phase 2.2: forward streaming text deltas to the gateway handler so
       // it can emit `suggestion.streaming` WS frames. The model writes JSON;
       // extractStreamingAnswer() parses partial JSON to surface user-visible
@@ -1473,6 +1503,9 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
 
   // Persist if there's something worth keeping.
   if (out.answerText || out.followupText) {
+    // Turn insert was fired without blocking the coach — make sure it has
+    // committed before the FK-dependent suggestion insert.
+    if (input.turnReady) await input.turnReady;
     const row = await prisma.suggestion.create({
       data: {
         workspaceId: input.workspaceId,
