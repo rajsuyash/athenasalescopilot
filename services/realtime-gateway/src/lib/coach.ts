@@ -116,82 +116,80 @@ const KEYWORDS: Record<Exclude<IntentCategory, 'none'>, RegExp[]> = {
     /\bteam size\b/i,
     /\bdoes (?:it|this) (?:work|support)/i,
   ],
+  // HIGH-PRECISION objection phrases only. These set `isObjection`, which
+  // bypasses the urgency gate — so a false positive here surfaces objection
+  // advice on benign speech (the F20 regression). Every pattern must be a
+  // phrase that is an objection IN CONTEXT, never a lone common word ("but",
+  // "think", "already", "commit", "busy", "compare"). Validated by the eval's
+  // benign precision corpus.
   objection: [
-    /\b(?:concern|worri|hesitat|skeptic)/i,
+    /\b(?:concern|worried|worries|worrying|hesitant|hesitat|skeptical|skeptic)\b/i,
+    // Price.
     /\btoo expensive\b/i,
-    /\bnot sure\b/i,
-    // Andres-archetype phrasings
-    /\bthink (?:about|it over)\b/i,
-    /\bsleep on it\b/i,
-    /\bget back to (?:you|me)\b/i,
-    /\b(?:talk|speak|check) (?:to|with) (?:my )?(?:wife|husband|partner|spouse|boss|manager|team|cofounder|co-founder)\b/i,
-    /\bother (?:vendor|option|provider)s?\b/i,
-    /\bcompare\b/i,
-    /\bdon'?t have (?:the )?time\b/i,
-    /\bbusy\b/i,
-    /\b(?:burned|burnt) before\b/i,
-    /\btried (?:something|this) (?:like )?(?:before|already)\b/i,
-    /\bjust send (?:me )?(?:info|the deck|materials)\b/i,
-    /\bsend (?:me )?(?:some )?(?:info|the deck|materials|it over)\b/i,
-    /\bemail me\b/i,
-    /\breview it (?:later|on my own)\b/i,
     /\bcan'?t afford\b/i,
     /\bover (?:my|our) budget\b/i,
-    /\bpushy\b/i,
-    /\blot of money\b/i,
-    /\bbefore (?:i )?committ?ing\b/i,
-    /\bcommit\b/i,
-    // Authority — deferring the decision to someone else.
-    /\brun (?:this|it) by\b/i,
-    /\b(?:check|clear) (?:this|it|with)\b.*\b(?:boss|manager|team|partner|procurement|leadership)\b/i,
-    /\bnot (?:only )?my (?:call|decision)\b/i,
-    /\bsign[- ]off\b/i,
-    /\bowns? (?:this|the) budget\b/i,
-    // Stall / time.
+    /\bway (?:too|over)\b[^.]*\b(?:expensive|much|budget|pricey|price)\b/i,
+    /\b(?:a )?lot of money\b/i,
+    /\bsteep\b/i,
+    /\bserious discount\b/i,
+    // Stall.
+    /\bnot sure\b/i,
+    /\bthink (?:about it|it over)\b/i,
+    /\bsleep on it\b/i,
+    /\bget back to (?:you|me)\b/i,
     /\bcircle back\b/i,
-    /\bnot ready\b/i,
-    /\bbandwidth\b/i,
+    /\bnot ready to (?:commit|decide|move|buy|sign|go)\b/i,
+    /\bbefore (?:i |we )?committ?ing\b/i,
+    // Authority — deferring the decision to someone else.
+    /\b(?:talk|speak|check|run) (?:this |it )?(?:to|with|by) (?:my |the |our )?(?:wife|husband|partner|spouse|boss|manager|team|cofounder|co-founder|leadership|procurement)\b/i,
+    /\b(?:not|n'?t)(?: only)? my (?:call|decision)\b/i,
+    /\b(?:need|get|require)[^.]*\bsign[- ]?off\b/i,
+    /\bowns? (?:this|the) budget\b/i,
+    // Comparison — incumbent / other options.
+    /\bother (?:vendor|option|provider)s?\b/i,
+    /\b(?:speak|talk) (?:to|with) (?:other|another|some|a couple)\b/i,
+    /\bevaluate (?:some )?alternativ/i,
+    /\balready (?:have|use|using|got|on) [^.]{0,25}\b(?:vendor|tool|solution|system|platform|provider)\b/i,
+    /\bhave a (?:vendor|solution|tool|system|platform)\b/i,
+    // Time.
+    /\bdon'?t have (?:the )?time\b/i,
+    /\bno (?:time|bandwidth)\b/i,
+    /\btoo busy\b/i,
+    /\b(?:isn'?t|not|no)(?: really)? a good time\b/i,
     /\bslammed\b/i,
-    /\bnot a good time\b/i,
     /\banother (?:project|thing) (?:in|right now)\b/i,
     // Skepticism.
+    /\b(?:burned|burnt)\b/i,
+    /\btried (?:something|this|that|it)\b[^.]*(?:before|already)\b/i,
     /\btoo good to be true\b/i,
-    /\bmove the needle\b/i,
-    /\bdidn'?t work\b/i,
+    /\b(?:won'?t|doesn'?t) (?:really )?move the needle\b/i,
     // Self-doubt.
     /\bdon'?t think (?:we|i) can\b/i,
-    /\bfits? us\b/i,
-    /\btoo many (?:other )?(?:responsibilit|things)/i,
+    /\btoo many (?:other )?responsibilit/i,
     /\b(?:won'?t|can'?t) (?:have the |keep the )?disciplin/i,
-    /\bwe'?re (?:kind of |a bit )?different\b/i,
+    /\bkind of different\b/i,
     // Resistance.
+    /\bpushy\b/i,
     /\bhard sell\b/i,
-    /\bsold to\b/i,
     /\bpushing (?:too )?hard\b/i,
-    /\bslow down\b/i,
-    // Price.
-    /\bsteep\b/i,
-    /\bway over\b/i,
-    /\bserious discount\b/i,
-    // Comparison — incumbent already in place.
-    /\balready (?:have|use|using|got|on)\b/i,
-    /\bdifferent (?:tool|vendor|solution|system|platform)\b/i,
+    /\bsold to\b/i,
+    // Avoidance.
+    /\bjust send (?:me )?(?:info|the deck|materials|it over|over)\b/i,
+    /\bsend (?:me )?(?:some )?(?:info|the deck|materials) (?:and|so|,|before)\b/i,
+    /\breview it (?:later|on my own)\b/i,
     // French objections (admin-web ships EN/FR; FR reps are real users).
     /trop cher/i,
-    /dépasse.*budget/i,
+    /dépasse[^.]*budget/i,
     /réfléchir/i,
-    /y penser/i,
-    /besoin (?:d'|de )penser/i,
-    /en parler (?:à|a)/i,
+    /(?:y penser|besoin (?:d'|de )penser)/i,
+    /en parler (?:à|a) (?:mon|ma|notre|mes)/i,
     /valid(?:e|er|ez) avec/i,
-    /comparer/i,
     /d'?autres fournisseurs/i,
-    /utilis(?:e|er) déjà/i,
-    /déjà un autre/i,
+    /utilis(?:e|er|ons) déjà/i,
     /pas le temps/i,
+    /trop occupé/i,
     /fait avoir/i,
     /pas sûr/i,
-    /trop occupé/i,
   ],
   technical_validation: [
     /\bbenchmark/i,
@@ -276,8 +274,12 @@ export function classifyHeuristic(text: string): HeuristicResult {
       Math.min(0.1, t.length / 1000),
   );
   const confidence = scores.size === 0 ? 0.5 : cap(0.55 + 0.1 * scores.size);
-  const isObjection =
-    cats.includes('objection') || hasObjectionWords || bestStage === 'objection_handling';
+  // Objection bypass is driven ONLY by a specific objection-phrase match — NOT
+  // by the loose `hasObjectionWords` (which contains "but", "think", "too",
+  // "busy") or the "but"/"however" stage signal. Those caused benign turns to
+  // surface objection advice (F20 regression). `hasObjectionWords` still feeds
+  // urgencyScore, where a single soft signal stays below the 0.35 gate.
+  const isObjection = cats.includes('objection');
   return { categories: cats, stageSignal: bestStage, urgencyScore, confidence, isObjection };
 }
 
@@ -445,9 +447,12 @@ async function retrieve(
     rows = await retrievePass(workspaceId, qVec, query, language, null, RETRIEVAL_TOP_K);
   }
 
-  const minScore = Number(process.env.RETRIEVAL_MIN_SCORE ?? 0.1);
+  // Relevance floor. 0.1 was near-noise — weakly related chunks grounded
+  // off-topic answers. 0.2 keeps only genuinely-matching content; if nothing
+  // clears, the coach asks to clarify or (with the output gate) stays silent.
+  const minScore = Number(process.env.RETRIEVAL_MIN_SCORE ?? 0.2);
   return rows
-    .filter((r) => r.score >= (Number.isFinite(minScore) ? minScore : 0.1))
+    .filter((r) => r.score >= (Number.isFinite(minScore) ? minScore : 0.2))
     .map((r) => ({
       id: r.id,
       text: r.chunk_text,
@@ -520,7 +525,9 @@ const EpisodeReport = z.object({
 });
 
 const SuggestSchema = z.object({
-  type: z.enum(['answer', 'ask_next', 'coach', 'risk']),
+  // 'none' = nothing worth saying right now → the rep sees no card (silence is
+  // better than a generic or off-topic line).
+  type: z.enum(['answer', 'ask_next', 'coach', 'risk', 'none']),
   answer_text: z.string().nullable(),
   followup_text: z.string().nullable(),
   source_chunk_ids: z.array(z.string()).default([]),
@@ -530,7 +537,27 @@ const SuggestSchema = z.object({
 });
 
 const SUGGEST_SYSTEM = `You are an expert sales coach whispering to the rep on a live call. The
-prospect just spoke — generate ONE grounded, contextual suggestion.
+prospect just spoke.
+
+TWO RULES ABOVE ALL ELSE:
+
+A. SPEAK THE EXACT WORDS. answer_text / followup_text are the LITERAL sentence
+   the rep reads out loud, word for word, right now. Write ONLY what they say —
+   never a description of what to do. NEVER "isolate the objection", "ask about
+   their concern", "reframe using opportunity cost", "acknowledge and pivot".
+   Those are coaching notes; put reasoning in "rationale", never in the spoken
+   text. If the rep can't copy the line and say it verbatim, it's wrong.
+   Natural spoken English, contractions, ≤30 words.
+   ✗ "Isolate the price objection before reframing."
+   ✓ "Totally fair — money aside for a second, do you feel this actually gets
+      you to that 20-hour week you mentioned?"
+
+B. SILENCE OVER NOISE. Only speak when you have something specific and clearly
+   relevant to THIS exact turn, grounded in the chunks or the objection. If the
+   prospect just said something benign, agreed, made small talk, or nothing in
+   the chunks genuinely fits — return {"type":"none", answer_text:null,
+   followup_text:null}. A blank overlay is better than a generic or off-topic
+   line. Do NOT invent a suggestion to fill space.
 
 You have two context sources:
 1. APPROVED CHUNKS — verified facts about the product/company. Cite these
@@ -552,22 +579,21 @@ generic rebuttal. The workspace runs the Socratic reframe loop:
 
   DISARM → ISOLATE → UNCOVER → REFRAME → JUSTIFY → CONSEQUENCE → IDENTITY CLOSE
 
-Read the recent turns to find where this objection already is in the loop,
-then output the SINGLE NEXT step the rep should say right now — never the
-whole loop:
-- Objection just raised, nothing addressed yet → DISARM + ISOLATE
-  ("[concern] aside for a second, do you actually feel this gets you to
-  <their goal>?").
-- Value already confirmed → UNCOVER the real concern ("what's the real thing
-  you'd want to think through?").
-- Real concern surfaced → REFRAME using the matching reframe-library chunk,
-  in the prospect's own numbers/words.
-- Reframe landed / prospect conceded → JUSTIFY ("why do you think that is?")
-  — make them defend the new frame; do NOT re-explain it.
-- New frame justified → CONSEQUENCE (cost of staying the same) then IDENTITY
-  CLOSE (what the future version of them decides today).
-Pick ONE move. Ground any factual claim in a chunk; the reframe move itself
-is type "coach".
+Read the recent turns to find where this objection is in the loop, then WRITE
+THE ACTUAL LINE for the single next step (never name the step — say the words):
+- Objection just raised → disarm + isolate. Write it: "Totally fair — [money]
+  aside for a second, do you actually feel this gets you to <their goal>?"
+- Value already confirmed → uncover. Write it: "So what's the real thing you'd
+  want to think through before it's a yes?"
+- Real concern surfaced → reframe, using the matching reframe-library chunk in
+  the prospect's own numbers. Write the reframe as one spoken line.
+- Reframe landed → justify. Write it: "And why do you think that is?"
+- Justified → consequence then identity-close. Write it: "So if nothing
+  changes for the next two quarters, what does that cost you?"
+Pick ONE move and output the exact words. The reframe move is type "coach".
+Fill <their goal> / numbers from BUSINESS CONTEXT or the recent turns; if you
+don't know them, phrase it naturally without brackets — never output a
+placeholder like <their goal> or [concern].
 
 EPISODE TRACKING. If an "OPEN OBJECTION EPISODE" block is present in the user
 message, this objection is already in progress — CONTINUE from the step shown
@@ -582,13 +608,16 @@ Report the loop state in the "episode" field every turn:
 - If the prospect just pushed back on your reframe, set "deflected": true.
 
 Output ONLY raw JSON (no markdown, no prose, no \`\`\` fences):
-{"type":"answer"|"ask_next"|"coach"|"risk","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>,"episode":{"is_objection":<bool>,"archetype":<price|stall|authority|comparison|time|skepticism|self_doubt|resistance|avoidance|null>,"step":<disarm|isolate|uncover|reframe|justify|consequence|identity_close|null>,"status":"open"|"resolved"|"abandoned","reframe":<str|null>,"deflected":<bool>}}
+{"type":"answer"|"ask_next"|"coach"|"risk"|"none","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>,"episode":{"is_objection":<bool>,"archetype":<price|stall|authority|comparison|time|skepticism|self_doubt|resistance|avoidance|null>,"step":<disarm|isolate|uncover|reframe|justify|consequence|identity_close|null>,"status":"open"|"resolved"|"abandoned","reframe":<str|null>,"deflected":<bool>}}
 
 Hard rules:
-- answer_text comes from CHUNKS only. NEVER invent facts.
+- answer_text / followup_text are the EXACT words the rep says out loud — never
+  a description of what to do. Reasoning goes in "rationale" only.
+- Nothing specific and relevant to say → {"type":"none"}. Never fill space.
+- answer_text's FACTS come from CHUNKS only. NEVER invent product facts.
 - source_chunk_ids MUST contain the exact UUID after "CHUNK_ID:" in the
   chunk header. NEVER use bracket numbers like [1] or [2].
-- ≤30 words. Plain conversational English. No marketing language. No "I" voice.
+- ≤30 words. Plain spoken English. No marketing language. No "I" voice.
 - The playbook is methodology, not source — never cite it as a chunk id.
 - One move per turn. Never stack two reframes or replay the whole loop.
 - Output raw JSON only. No text before or after the JSON object.`;
@@ -788,11 +817,16 @@ export function invalidateScriptCache(workspaceId: string): void {
 
 const PROACTIVE_SYSTEM = `You are an expert sales coach whispering to the rep on a live call.
 
+followup_text is the EXACT sentence the rep says out loud, word for word — a
+line they can copy and speak verbatim. NEVER a description of what to do
+("open with rapport", "ask a discovery question"); write the actual words
+("How are things running with your current setup today?"). Reasoning goes in
+"rationale" only.
+
 You have access to the rep's WORKSPACE PLAYBOOK below. Treat the playbook as
 a FRAMEWORK and SKILL — internalize its methodology, sequencing, and tone.
 DO NOT quote it verbatim. DO NOT paste raw script lines. Generate a fresh,
-contextual suggestion that advances the conversation in the spirit of the
-playbook.
+contextual line that advances the conversation in the spirit of the playbook.
 
 Output ONLY raw JSON (no markdown, no prose, no code fences):
 {"type":"coach"|"ask_next","followup_text":<str>,"source_chunk_ids":[],"confidence":<0..1>,"rationale":<short>}
@@ -1369,7 +1403,10 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       const claimed = r.parsed.source_chunk_ids ?? [];
       const allowed = new Set(chunks.map((c) => c.id));
       const cleaned = claimed.filter((id) => allowed.has(id));
-      if (cleaned.length !== claimed.length) {
+      if (r.parsed.type === 'none') {
+        // The model judged nothing worth saying for this turn — stay silent.
+        out = suppressed(intent, 'llm: nothing relevant');
+      } else if (cleaned.length !== claimed.length) {
         out = suppressed(intent, 'policy_violation: invalid_source');
       } else {
         const top = chunks[0]?.score ?? 0;

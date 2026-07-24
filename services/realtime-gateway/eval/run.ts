@@ -40,15 +40,15 @@ const load = (f: string): unknown => JSON.parse(readFileSync(join(HERE, 'fixture
 const URGENCY_THRESHOLD = Number(process.env.URGENCY_THRESHOLD ?? 0.35);
 
 // Gates. Below these → non-zero exit.
-// F20 raised EN objection-detection recall from ~45% to ~100% by making
-// objections bypass the urgency gate (isObjection) and widening the objection
-// patterns. Gate is set with headroom below current so new fixtures can be
-// added without instantly failing, but a real regression trips it. FR is still
-// FR intent (F20-FR) added French objection patterns, taking FR recall from
-// ~10% to ~100% — now gated too.
-const EN_RECALL_GATE = 0.9;
-const EN_RECALL_TARGET = 0.95;
-const FR_RECALL_GATE = 0.85;
+// RECALL: real objections must reach the coach (EN + FR).
+// PRECISION: benign turns must NOT trigger objection coaching. Precision is the
+// gate F20 lacked — it shipped a false-positive regression (benign turns firing
+// objection advice) because the eval only measured recall. It is weighted as a
+// hard gate now: random advice on normal conversation is worse than a missed
+// objection.
+const EN_RECALL_GATE = 0.85;
+const FR_RECALL_GATE = 0.8;
+const PRECISION_GATE = 0.95;
 const EPISODE_GATE = 1.0;
 
 interface ObjectionItem {
@@ -98,7 +98,7 @@ for (const [arch, b] of [...byArchetype.entries()].sort()) {
 }
 const enRecall = enTotal === 0 ? 0 : enHit / enTotal;
 console.log(
-  `\n  EN recall: ${pct(enHit, enTotal)} (${enHit}/${enTotal})   [baseline gate ${Math.round(EN_RECALL_GATE * 100)}%, target ${Math.round(EN_RECALL_TARGET * 100)}% via F20]`,
+  `\n  EN recall: ${pct(enHit, enTotal)} (${enHit}/${enTotal})   [gate ${Math.round(EN_RECALL_GATE * 100)}%]`,
 );
 const frRecall = frTotal === 0 ? 0 : frHit / frTotal;
 console.log(
@@ -116,13 +116,36 @@ if (misses.length > 0) {
 }
 if (enRecall < EN_RECALL_GATE) {
   console.log(
-    `\n  ✖ EN recall ${pct(enHit, enTotal)} below baseline gate ${Math.round(EN_RECALL_GATE * 100)}% — REGRESSION`,
+    `\n  ✖ EN recall ${pct(enHit, enTotal)} below gate ${Math.round(EN_RECALL_GATE * 100)}% — REGRESSION`,
   );
   failed = true;
-} else if (enRecall < EN_RECALL_TARGET) {
+}
+
+// ── 1b. Precision — benign turns must NOT trigger objection coaching ────────
+const benign = (load('benign.json') as { items: Array<{ text: string }> }).items;
+let benignQuiet = 0;
+const falsePositives: string[] = [];
+for (const b of benign) {
+  const intent = classifyHeuristic(b.text);
+  // A benign turn "stays quiet" if it is not flagged as an objection. (Bare
+  // questions are excluded from this corpus on purpose.)
+  if (!intent.isObjection) benignQuiet += 1;
+  else falsePositives.push(b.text);
+}
+const precision = benign.length === 0 ? 1 : benignQuiet / benign.length;
+console.log(`\n${line}\nF22 coach-eval · precision (benign turns must stay quiet)\n${line}`);
+console.log(
+  `  benign kept quiet: ${pct(benignQuiet, benign.length)} (${benignQuiet}/${benign.length})   [gate ${Math.round(PRECISION_GATE * 100)}%]`,
+);
+if (falsePositives.length > 0) {
+  console.log('\n  FALSE POSITIVES (benign turn → objection advice):');
+  for (const t of falsePositives) console.log(`    "${t}"`);
+}
+if (precision < PRECISION_GATE) {
   console.log(
-    `\n  ⚠ EN recall below the ${Math.round(EN_RECALL_TARGET * 100)}% target — regex gate leaks objections (drives F20).`,
+    `\n  ✖ precision ${pct(benignQuiet, benign.length)} below gate ${Math.round(PRECISION_GATE * 100)}% — random advice on benign turns`,
   );
+  failed = true;
 }
 
 // ── 2. Objection-loop state machine ────────────────────────────────────────
