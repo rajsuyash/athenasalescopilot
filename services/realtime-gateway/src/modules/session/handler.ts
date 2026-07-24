@@ -210,7 +210,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     const sessionId = crypto.randomUUID();
     let lastFrameAt = Date.now();
     let inflightCoach = false;
-    let pending: { customerText: string; turnId: string } | null = null;
+    let pending: { customerText: string; turnId: string; turnReady: Promise<void> } | null = null;
     // log is rebound after auth-frame completes so workspaceId is logged.
     let log = req.log.child(
       claims ? { sessionId, workspaceId: claims.workspaceId } : { sessionId },
@@ -302,7 +302,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
     const drainPending = async (): Promise<void> => {
       if (inflightCoach || !pending || !meetingId || !claims) return;
-      const { customerText, turnId } = pending;
+      const { customerText, turnId, turnReady } = pending;
       pending = null;
       inflightCoach = true;
       // Phase 2.2: tracks the last streaming text we sent so we only
@@ -323,6 +323,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             contextTurns: rolling.slice(-12),
             openEpisode,
             recentSuggestions: recentSuggestions.slice(0, 8),
+            turnReady,
             onPartialText: (_delta, accumulated) => {
               // Anthropic streams raw JSON tokens. We extract just the
               // user-visible answer_text / followup_text portions and
@@ -467,21 +468,27 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         latencyMs: arrivalDelay,
       });
 
-      // Persist transcript segment (PRD F10: workspace-scoped).
-      await prisma.transcriptSegment.create({
-        data: {
-          workspaceId: claims.workspaceId,
-          meetingId,
-          speakerType: speaker,
-          speakerLabel: seg.speakerLabel,
-          text: seg.text,
-          startMs: seg.startMs,
-          endMs: seg.endMs,
-          confidence: seg.confidence,
-          sourceType: 'stt_audio',
-          language: seg.language,
-        },
-      });
+      // Persist transcript segment (PRD F10: workspace-scoped). Fire-and-forget
+      // — an awaited insert here put a DB round trip in front of the client
+      // seeing the transcript line AND in front of every coach call. Nothing
+      // downstream in this handler reads the row; the recap reads segments
+      // minutes later, long after this insert lands.
+      void prisma.transcriptSegment
+        .create({
+          data: {
+            workspaceId: claims.workspaceId,
+            meetingId,
+            speakerType: speaker,
+            speakerLabel: seg.speakerLabel,
+            text: seg.text,
+            startMs: seg.startMs,
+            endMs: seg.endMs,
+            confidence: seg.confidence,
+            sourceType: 'stt_audio',
+            language: seg.language,
+          },
+        })
+        .catch((err) => log.warn({ err }, 'segment persist failed'));
 
       sendJson(socket, { type: 'transcript.final', segment: seg, speaker });
 
@@ -516,15 +523,27 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       lastCustomerFinalAt = Date.now();
 
       // Customer turn → reactive coach path (objection handling, grounded).
-      const turn = await prisma.turn.create({
-        data: {
-          meetingId,
-          speakerType: 'customer',
-          startMs: seg.startMs,
-          endMs: seg.endMs,
-        },
-      });
-      pending = { customerText: seg.text, turnId: turn.id };
+      // Pre-generate the turn id and insert WITHOUT blocking the coach — this
+      // round trip used to sit in front of every LLM call. The suggestion
+      // insert has an FK on turns, so coachAndPersist awaits `turnReady`
+      // right before persisting (the LLM call gives the insert ~a second of
+      // head start; the await is effectively free).
+      const turnId = crypto.randomUUID();
+      const turnReady = prisma.turn
+        .create({
+          data: {
+            id: turnId,
+            meetingId,
+            speakerType: 'customer',
+            startMs: seg.startMs,
+            endMs: seg.endMs,
+          },
+        })
+        .then(() => undefined)
+        .catch((err) => {
+          log.warn({ err }, 'turn persist failed');
+        });
+      pending = { customerText: seg.text, turnId, turnReady };
       void drainPending();
     };
 
