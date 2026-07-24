@@ -132,12 +132,50 @@ const KEYWORDS: Record<Exclude<IntentCategory, 'none'>, RegExp[]> = {
     /\b(?:burned|burnt) before\b/i,
     /\btried (?:something|this) (?:like )?(?:before|already)\b/i,
     /\bjust send (?:me )?(?:info|the deck|materials)\b/i,
+    /\bsend (?:me )?(?:some )?(?:info|the deck|materials|it over)\b/i,
+    /\bemail me\b/i,
+    /\breview it (?:later|on my own)\b/i,
     /\bcan'?t afford\b/i,
     /\bover (?:my|our) budget\b/i,
     /\bpushy\b/i,
     /\blot of money\b/i,
     /\bbefore (?:i )?committ?ing\b/i,
     /\bcommit\b/i,
+    // Authority — deferring the decision to someone else.
+    /\brun (?:this|it) by\b/i,
+    /\b(?:check|clear) (?:this|it|with)\b.*\b(?:boss|manager|team|partner|procurement|leadership)\b/i,
+    /\bnot (?:only )?my (?:call|decision)\b/i,
+    /\bsign[- ]off\b/i,
+    /\bowns? (?:this|the) budget\b/i,
+    // Stall / time.
+    /\bcircle back\b/i,
+    /\bnot ready\b/i,
+    /\bbandwidth\b/i,
+    /\bslammed\b/i,
+    /\bnot a good time\b/i,
+    /\banother (?:project|thing) (?:in|right now)\b/i,
+    // Skepticism.
+    /\btoo good to be true\b/i,
+    /\bmove the needle\b/i,
+    /\bdidn'?t work\b/i,
+    // Self-doubt.
+    /\bdon'?t think (?:we|i) can\b/i,
+    /\bfits? us\b/i,
+    /\btoo many (?:other )?(?:responsibilit|things)/i,
+    /\b(?:won'?t|can'?t) (?:have the |keep the )?disciplin/i,
+    /\bwe'?re (?:kind of |a bit )?different\b/i,
+    // Resistance.
+    /\bhard sell\b/i,
+    /\bsold to\b/i,
+    /\bpushing (?:too )?hard\b/i,
+    /\bslow down\b/i,
+    // Price.
+    /\bsteep\b/i,
+    /\bway over\b/i,
+    /\bserious discount\b/i,
+    // Comparison — incumbent already in place.
+    /\balready (?:have|use|using|got|on)\b/i,
+    /\bdifferent (?:tool|vendor|solution|system|platform)\b/i,
   ],
   technical_validation: [
     /\bbenchmark/i,
@@ -163,12 +201,23 @@ export interface HeuristicResult {
   stageSignal: StageSignal;
   urgencyScore: number;
   confidence: number;
+  /** True when the turn carries any objection signal (category, objection
+   *  words, or objection-handling stage). Objections bypass the urgency gate —
+   *  we never drop a real objection just because its numeric score is low
+   *  (the A4 weakness: single-signal objections scored ~0.30 < 0.35). */
+  isObjection: boolean;
 }
 
 export function classifyHeuristic(text: string): HeuristicResult {
   const t = text.trim();
   if (!t) {
-    return { categories: ['none'], stageSignal: 'discovery', urgencyScore: 0, confidence: 1 };
+    return {
+      categories: ['none'],
+      stageSignal: 'discovery',
+      urgencyScore: 0,
+      confidence: 1,
+      isObjection: false,
+    };
   }
   const scores = new Map<IntentCategory, number>();
   for (const [cat, patterns] of Object.entries(KEYWORDS) as Array<
@@ -211,7 +260,9 @@ export function classifyHeuristic(text: string): HeuristicResult {
       Math.min(0.1, t.length / 1000),
   );
   const confidence = scores.size === 0 ? 0.5 : cap(0.55 + 0.1 * scores.size);
-  return { categories: cats, stageSignal: bestStage, urgencyScore, confidence };
+  const isObjection =
+    cats.includes('objection') || hasObjectionWords || bestStage === 'objection_handling';
+  return { categories: cats, stageSignal: bestStage, urgencyScore, confidence, isObjection };
 }
 
 interface ChunkRow {
@@ -877,6 +928,7 @@ export async function proactiveCoach(
       stageSignal,
       urgencyScore: 0.4,
       confidence: conf,
+      isObjection: false,
       source: 'llm',
     },
     sources: [],
@@ -1092,7 +1144,13 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
     latencyMs: Date.now() - tStart,
   });
 
-  if (intent.urgencyScore < deps.urgencyThreshold) {
+  // Objections ALWAYS proceed. The urgency gate exists for cost control on
+  // generic chatter, not to filter objections — dropping a real objection over
+  // a low numeric score was the A4 weakness (single-signal objections scored
+  // ~0.30 < 0.35, suppressing them before the LLM). Objection turns are a
+  // fraction of the call and cheap on Haiku, so bypassing the gate for them is
+  // cost-acceptable while capturing the recall the eval flagged.
+  if (!intent.isObjection && intent.urgencyScore < deps.urgencyThreshold) {
     // Tagged degraded:true so the analytics aggregator can exclude these
     // non-events from p50/p95 — the rep never sees an LLM call here.
     emitLatency({
