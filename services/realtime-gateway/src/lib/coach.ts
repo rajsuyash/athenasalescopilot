@@ -336,10 +336,11 @@ const OBJECTION_CATEGORY_PREFIX = 'objection-handling-';
 const RETRIEVAL_TOP_K = 5;
 
 /** How many prior turns the reactive prompt carries. The model needs enough
- *  history to locate itself in the objection loop (did the rep already
- *  disarm? did the prospect concede value?). 3 was too shallow to pick the
- *  correct NEXT step. */
-const REACTIVE_CONTEXT_TURNS = 6;
+ *  history to locate itself in the objection loop AND to see answers the
+ *  prospect already gave — at 6 turns, an answer from earlier in the call
+ *  scrolled out of view and the coach re-asked it (2026-07-24 field report).
+ *  10 turns on Haiku is still cheap. */
+const REACTIVE_CONTEXT_TURNS = 10;
 
 /** Merge objection-restricted rows ahead of general rows, dedup by id
  *  (first occurrence wins, preserving objection-first order), and cap to
@@ -888,7 +889,7 @@ function normalizeForDedup(s: string): string {
     .trim();
 }
 
-function isDuplicateOrSpoken(
+export function isDuplicateOrSpoken(
   candidate: string,
   recentSuggestions: string[],
   contextTurns: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>,
@@ -1113,6 +1114,10 @@ export interface CoachInput {
   /** The objection episode currently open for this meeting (threaded by the
    *  handler across turns), or null/undefined if none is open. */
   openEpisode?: EpisodeState | null;
+  /** Suggestions already shown this call (most-recent first). Fed into the
+   *  prompt (don't repeat / don't re-ask what was answered) and checked
+   *  post-hoc — a duplicate is suppressed instead of displayed. */
+  recentSuggestions?: string[];
 }
 
 export interface CoachOutput {
@@ -1364,6 +1369,12 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
               : ''
           }`
         : null,
+      input.recentSuggestions?.length
+        ? `Already suggested this call (do NOT repeat or rephrase these; if the prospect already answered one, never ask it again — return type "none" instead):\n${input.recentSuggestions
+            .slice(0, 6)
+            .map((s, i) => `${i + 1}. ${s}`)
+            .join('\n')}`
+        : null,
       scriptBody
         ? `Workspace playbook for stage=${intent.stageSignal} (METHODOLOGY — internalize the pattern and adapt to the prospect's actual words; DO NOT quote verbatim; never cite as a chunk):\n${scriptBody}`
         : null,
@@ -1430,6 +1441,24 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
           openEpisode: null, // set by reconcileEpisode below
         };
       }
+    }
+  }
+
+  // Post-hoc dedup: even with the avoid-list in the prompt, the model can
+  // regurgitate a line it (or the proactive path) already suggested, or one
+  // the rep already spoke. Suppress display instead of repeating — a repeated
+  // card is exactly the "asking what the client already answered" failure.
+  if (out.display) {
+    const candidate = out.followupText ?? out.answerText ?? '';
+    if (
+      candidate &&
+      isDuplicateOrSpoken(candidate, input.recentSuggestions ?? [], input.contextTurns)
+    ) {
+      out = {
+        ...out,
+        display: false,
+        rationale: `${out.rationale} (duplicate suppressed)`,
+      };
     }
   }
 
@@ -1524,7 +1553,11 @@ function askNext(intent: HeuristicResult, category: string | null): CoachOutput 
     sourceChunkIds: [],
     policyVersion: POLICY_VERSION,
     rationale: 'no matching chunk; ask to clarify',
-    display: true,
+    // Canned fallback questions are context-blind — they can re-ask something
+    // the prospect already answered (2026-07-24 field report). Persisted for
+    // analytics (knowledge-gap signal) but never shown. Silence over noise;
+    // only the LLM, which sees the conversation, may surface an ask_next.
+    display: false,
     intent: { ...intent, source: 'heuristic' },
     sources: [],
     suggestionId: null,

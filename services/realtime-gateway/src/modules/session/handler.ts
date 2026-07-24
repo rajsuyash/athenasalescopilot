@@ -222,6 +222,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     // hasn't spoken in 12s during opening/qualification/discovery stages.
     let captureStartedAt = 0;
     let lastRepFinalAt = 0;
+    let lastCustomerFinalAt = 0;
     let lastSuggestionAt = 0;
     let openingFired = false;
     let currentStage = 'opener';
@@ -317,9 +318,11 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             turnId,
             customerText,
             // Reactive coach needs enough history to locate the objection in
-            // the reframe loop (coach.ts re-slices to REACTIVE_CONTEXT_TURNS).
-            contextTurns: rolling.slice(-8),
+            // the reframe loop AND to see already-answered questions
+            // (coach.ts re-slices to REACTIVE_CONTEXT_TURNS).
+            contextTurns: rolling.slice(-12),
             openEpisode,
+            recentSuggestions: recentSuggestions.slice(0, 8),
             onPartialText: (_delta, accumulated) => {
               // Anthropic streams raw JSON tokens. We extract just the
               // user-visible answer_text / followup_text portions and
@@ -342,10 +345,27 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           },
           deps,
         );
-        lastSuggestionAt = Date.now();
         // Carry the objection-loop state into the next customer turn.
         openEpisode = r.openEpisode;
-        sendJson(socket, { type: 'suggestion.generated', suggestion: r });
+        if (r.display) {
+          lastSuggestionAt = Date.now();
+          // Remember what was shown so the coach never repeats it and never
+          // re-asks a question the prospect already answered.
+          const shown = r.followupText ?? r.answerText;
+          if (shown) {
+            recentSuggestions.unshift(shown);
+            if (recentSuggestions.length > 12) recentSuggestions.length = 12;
+          }
+          sendJson(socket, { type: 'suggestion.generated', suggestion: r });
+        } else {
+          // Suppressed (silence gate / dedup / low confidence). The extension
+          // renders anything with text, so strip the spoken fields — this both
+          // hides the card and clears any in-flight streaming placeholder.
+          sendJson(socket, {
+            type: 'suggestion.generated',
+            suggestion: { ...r, answerText: null, followupText: null },
+          });
+        }
       } catch (err) {
         log.error({ err }, 'coach failed');
         sendJson(socket, {
@@ -405,12 +425,16 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             meetingId,
             stage: currentStage,
             trigger,
-            contextTurns: rolling.slice(-3),
+            // Proactive nudges also need to see what was recently covered so
+            // the script line fits the conversation, not the script's order.
+            contextTurns: rolling.slice(-8),
             recentSuggestions: recentSuggestions.slice(0, 8),
           },
           deps,
         );
-        if (r) {
+        // The extension renders any suggestion with text — respect the
+        // display gate server-side.
+        if (r && r.display) {
           lastSuggestionAt = Date.now();
           if (r.followupText) {
             recentSuggestions.unshift(r.followupText);
@@ -470,10 +494,14 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         const prev = currentStage;
         currentStage = detected;
         log.debug({ from: prev, to: detected, speaker }, 'stage transition');
-        // Fire one proactive prompt at the start of every new non-objection
-        // stage so the rep gets a fresh nudge as the call evolves. Throttle
-        // is respected inside the ticker loop (we set lastSuggestionAt below).
+        // Fire a script nudge only when the REP moves the call into a new
+        // stage with a real keyword signal. Two spam sources removed
+        // (2026-07-24 field report): customer keywords triggering script
+        // nudges mid-answer, and bounces back to 'discovery' — the detector's
+        // no-keyword default — firing a nudge on nearly every neutral turn.
         if (
+          speaker === 'rep' &&
+          detected !== 'discovery' &&
           PROACTIVE_STAGES.includes(detected) &&
           Date.now() - lastSuggestionAt >= PROACTIVE_THROTTLE_MS
         ) {
@@ -485,6 +513,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         lastRepFinalAt = Date.now();
         return;
       }
+      lastCustomerFinalAt = Date.now();
 
       // Customer turn → reactive coach path (objection handling, grounded).
       const turn = await prisma.turn.create({
@@ -692,6 +721,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       // nudges based on the current stage tracker.
       captureStartedAt = Date.now();
       lastRepFinalAt = captureStartedAt;
+      lastCustomerFinalAt = captureStartedAt;
       proactiveTick = setInterval(() => {
         if (!meetingId || inflightCoach) return;
         const now = Date.now();
@@ -704,10 +734,17 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           return;
         }
 
+        // "Silence" nudge only on a TRUE lull — both sides quiet. The old
+        // rep-only check fired while the CUSTOMER was mid-answer (rep quiet
+        // because they're listening), spamming script nudges unrelated to what
+        // the prospect was saying (2026-07-24 field report). Also space
+        // repeated lull nudges by the full silence window, not the 8s throttle.
         if (
           PROACTIVE_STAGES.includes(currentStage) &&
           currentStage !== 'closing' &&
-          now - lastRepFinalAt >= REP_SILENCE_MS
+          now - lastRepFinalAt >= REP_SILENCE_MS &&
+          now - lastCustomerFinalAt >= REP_SILENCE_MS &&
+          now - lastSuggestionAt >= REP_SILENCE_MS
         ) {
           void fireProactive('rep_silence');
         }
