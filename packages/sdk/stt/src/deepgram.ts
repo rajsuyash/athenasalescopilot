@@ -52,6 +52,13 @@ export class DeepgramSttClient implements SttClient {
       // cut off natural sentence pauses.
       endpointing: '200',
     });
+    if (opts.multichannel) {
+      // Transcribe each channel independently; results carry `channel_index`
+      // so the consumer can map channel → speaker deterministically (tab audio
+      // on ch0 = customer, mic on ch1 = rep) instead of trusting diarization
+      // over a summed mono mix.
+      params.set('multichannel', 'true');
+    }
     if (opts.vocabulary && opts.vocabulary.length > 0) {
       // Deepgram accepts repeated `keywords` query params with optional boost.
       for (const k of opts.vocabulary) params.append('keywords', `${k}:1`);
@@ -81,6 +88,9 @@ export class DeepgramSttClient implements SttClient {
         if (!alt || !alt.transcript) return;
         const startMs = Math.round((msg.start ?? 0) * 1000);
         const endMs = startMs + Math.round((msg.duration ?? 0) * 1000);
+        // In multichannel mode Deepgram tags each Results message with
+        // `channel_index: [thisChannel, totalChannels]`.
+        const channelIndex = msg.channel_index?.[0];
         const speakerLabel = pickSpeaker(alt) ?? 'Speaker';
         const seg: SttSegment = {
           segmentId: crypto.randomUUID(),
@@ -90,6 +100,7 @@ export class DeepgramSttClient implements SttClient {
           confidence: alt.confidence ?? 0,
           isFinal: msg.is_final === true,
           speakerLabel,
+          ...(typeof channelIndex === 'number' ? { channelIndex } : {}),
           language: opts.language ?? 'en-US',
         };
         if (seg.isFinal) handlers.onFinal(seg);
@@ -134,6 +145,8 @@ interface DeepgramTranscriptMessage {
   is_final?: boolean;
   start?: number;
   duration?: number;
+  /** [thisChannel, totalChannels] — present when multichannel is enabled. */
+  channel_index?: number[];
   channel?: {
     alternatives?: Array<{
       transcript: string;

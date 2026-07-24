@@ -49,6 +49,9 @@ interface UpdateMsg {
   sessionId?: string | null;
   closed?: boolean;
   reconnectAttempt?: number | null;
+  /** F17: false when the rep mic couldn't be captured — capture continues
+   *  tab-only (customer audio), but rep-side coaching is off. */
+  micCaptured?: boolean;
 }
 
 interface ActiveCapture {
@@ -69,6 +72,9 @@ interface ActiveCapture {
   gatewayUrl: string;
   accessToken: string;
   forceCustomer: boolean;
+  /** 2 = interleaved stereo (tab=customer ch0, mic=rep ch1); 1 = mono (mic
+   *  unavailable). Sent to the gateway in the hello frame. */
+  channels: number;
   /** Reconnect attempt counter; null when no reconnect is in flight. */
   reconnectAttempt: number | null;
 }
@@ -122,6 +128,8 @@ async function start(req: StartMsg): Promise<void> {
     }
   }
   const tabSrc = ctx.createMediaStreamSource(stream);
+  // Keep the rep hearing the call (tab audio → speakers). This monitor path is
+  // separate from the capture graph below.
   tabSrc.connect(ctx.destination);
 
   try {
@@ -131,15 +139,31 @@ async function start(req: StartMsg): Promise<void> {
     reportUpdate({ lastError: `worklet: ${(err as Error).message}` });
     return;
   }
-  const node = new AudioWorkletNode(ctx, 'pcm-encoder');
-  const mixer = ctx.createGain();
-  mixer.gain.value = 1.0;
-  tabSrc.connect(mixer);
+
+  // F17: capture tab audio (the customer) and the rep's mic on SEPARATE
+  // channels so the gateway maps speaker→role by channel, not by diarizing a
+  // summed mono mix. ChannelMerger routes tab→ch0, mic→ch1; the worklet emits
+  // interleaved stereo. If the mic is unavailable we fall back to mono tab-only
+  // (customer audio only) and tell the SW so it can flag rep-coaching off.
+  const captureChannels = micStream ? 2 : 1;
+  const node = new AudioWorkletNode(ctx, 'pcm-encoder', {
+    channelCount: captureChannels,
+    channelCountMode: 'explicit',
+    // 'discrete' keeps ch0/ch1 untouched — no L/R downmix that would re-merge
+    // the two speakers we just split apart.
+    channelInterpretation: 'discrete',
+  });
   if (micStream) {
+    const merger = ctx.createChannelMerger(2);
     const micSrc = ctx.createMediaStreamSource(micStream);
-    micSrc.connect(mixer);
+    tabSrc.connect(merger, 0, 0); // tab → output channel 0 (customer)
+    micSrc.connect(merger, 0, 1); // mic → output channel 1 (rep)
+    merger.connect(node);
+  } else {
+    tabSrc.connect(node);
+    log.warn('[athena-offscreen] mic unavailable — mono tab-only capture');
   }
-  mixer.connect(node);
+  reportUpdate({ micCaptured: micStream !== null });
 
   active = {
     ws: null as unknown as WebSocket,
@@ -156,6 +180,7 @@ async function start(req: StartMsg): Promise<void> {
     gatewayUrl: req.gatewayUrl,
     accessToken: req.accessToken,
     forceCustomer: req.forceCustomer === true,
+    channels: captureChannels,
     reconnectAttempt: null,
   };
 
@@ -252,6 +277,7 @@ function openSocket(): void {
             type: 'hello',
             meetingId: cur.meetingId,
             sampleRate: 16000,
+            channels: cur.channels,
             language: 'en-US',
             ...(cur.forceCustomer ? { forceCustomer: true } : {}),
           }),

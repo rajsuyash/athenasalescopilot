@@ -54,6 +54,10 @@ const HelloSchema = z.object({
   type: z.literal('hello'),
   meetingId: z.string().uuid(),
   sampleRate: z.number().int().positive().optional(),
+  // 1 = mono (legacy / mic-unavailable fallback). 2 = interleaved stereo with
+  // tab audio on ch0 (customer) and mic on ch1 (rep) → deterministic speaker
+  // attribution (F17). Defaults to 1 for older clients.
+  channels: z.number().int().min(1).max(2).optional(),
   language: z.string().optional(),
   vocabulary: z.array(z.string().min(1)).optional(),
   repLabel: z.string().optional(),
@@ -99,15 +103,27 @@ interface SessionDeps {
   autoEndMeeting: boolean;
 }
 
-class SpeakerMap {
+/** Audio channel carrying the rep's mic in dual-channel capture (F17). Tab
+ *  audio (the customer) is ch0; mic (the rep) is ch1. */
+const REP_CHANNEL = 1;
+
+export class SpeakerMap {
   private repLabel: string | null;
   private forceCustomer: boolean;
   constructor(forced: string | null, forceCustomer = false) {
     this.repLabel = forced;
     this.forceCustomer = forceCustomer;
   }
-  classify(label: string): 'rep' | 'customer' {
+  classify(label: string, channelIndex?: number): 'rep' | 'customer' {
     if (this.forceCustomer) return 'customer';
+    // Deterministic dual-channel attribution: mic (ch1) is the rep, tab audio
+    // (ch0) is the customer. No diarization guessing, no first-speaker-wins
+    // race that could swap roles for a whole call.
+    if (typeof channelIndex === 'number') {
+      return channelIndex === REP_CHANNEL ? 'rep' : 'customer';
+    }
+    // Mono fallback (single-channel capture / caption injection): assume the
+    // first diarized speaker is the rep.
     if (this.repLabel === null) {
       this.repLabel = label;
       return 'rep';
@@ -411,7 +427,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
     const onFinal = async (seg: SttSegment): Promise<void> => {
       if (!meetingId || !speakerMap || !claims) return;
-      const speaker = speakerMap.classify(seg.speakerLabel);
+      const speaker = speakerMap.classify(seg.speakerLabel, seg.channelIndex);
       rolling.push({ speaker, text: seg.text });
       if (rolling.length > deps.maxPendingSegments) {
         rolling.splice(0, rolling.length - deps.maxPendingSegments);
@@ -627,6 +643,10 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       }
       speakerMap = new SpeakerMap(parsed.data.repLabel ?? null, forceCustomer);
 
+      // F17: 2 = interleaved stereo (tab=customer ch0, mic=rep ch1) → enable
+      // Deepgram multichannel for deterministic attribution. 1 = mono fallback.
+      const channels = parsed.data.channels ?? 1;
+
       try {
         sttStream = await deps.stt.open(
           {
@@ -634,7 +654,8 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             meetingId: meeting.id,
             ...(parsed.data.language ? { language: parsed.data.language } : {}),
             sampleRate: parsed.data.sampleRate ?? 16000,
-            channels: 1,
+            channels,
+            ...(channels === 2 ? { multichannel: true } : {}),
             ...(parsed.data.vocabulary ? { vocabulary: parsed.data.vocabulary } : {}),
           },
           {
