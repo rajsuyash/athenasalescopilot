@@ -5,6 +5,7 @@ import {
   reconcileEpisode,
   classifyHeuristic,
   formatBusinessContext,
+  isDuplicateOrSpoken,
   type EpisodeState,
 } from './coach.js';
 
@@ -147,4 +148,30 @@ test('classifyHeuristic: French objections are flagged (F20-FR)', () => {
   ]) {
     assert.equal(classifyHeuristic(t).isObjection, true, t);
   }
+});
+
+test('isDuplicateOrSpoken: repeated suggestion and already-answered lines are caught', () => {
+  const ctx = [
+    { speaker: 'customer' as const, text: 'We have about forty seats across the team.' },
+    { speaker: 'rep' as const, text: 'How many seats are you sizing this for right now?' },
+  ];
+  // Same line as a recent suggestion → duplicate.
+  assert.equal(
+    isDuplicateOrSpoken(
+      'How many seats are you sizing this for?',
+      ['How many seats are you sizing this for?'],
+      ctx,
+    ),
+    true,
+  );
+  // Rep already spoke (a paraphrase of) the candidate → duplicate.
+  assert.equal(
+    isDuplicateOrSpoken('How many seats are you sizing this for right now?', [], ctx),
+    true,
+  );
+  // Fresh line → not a duplicate.
+  assert.equal(
+    isDuplicateOrSpoken('What would a successful rollout look like for you?', [], ctx),
+    false,
+  );
 });
