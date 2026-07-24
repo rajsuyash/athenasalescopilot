@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeObjectionFirst, reconcileEpisode, type EpisodeState } from './coach.js';
+import {
+  mergeObjectionFirst,
+  reconcileEpisode,
+  classifyHeuristic,
+  type EpisodeState,
+} from './coach.js';
 
 test('mergeObjectionFirst puts objection rows first', () => {
   const objection = [{ id: 'o1' }, { id: 'o2' }];
@@ -81,4 +86,27 @@ test('reconcileEpisode: non-objection turn with open episode → close abandoned
 
 test('reconcileEpisode: non-objection turn, no episode → none', () => {
   assert.deepEqual(reconcileEpisode(null, { is_objection: false }, ['none']), { kind: 'none' });
+});
+
+test('classifyHeuristic: single-signal objections are flagged (F20 recall fix)', () => {
+  // These scored ~0.30 (< 0.35 urgency) before F20 and were silently dropped.
+  for (const t of [
+    "You're being a bit pushy here.",
+    "I'll have to run this by my boss first.",
+    "Now isn't a good time, we're slammed.",
+    "We're already using a different tool for this.",
+    "Let's circle back in a few weeks.",
+  ]) {
+    assert.equal(classifyHeuristic(t).isObjection, true, t);
+  }
+});
+
+test('classifyHeuristic: benign turns are not flagged as objections', () => {
+  for (const t of [
+    "Yeah that sounds great, let's do it.",
+    'Can you walk me through the dashboard?',
+    'We have about fifty reps on the team.',
+  ]) {
+    assert.equal(classifyHeuristic(t).isObjection, false, t);
+  }
 });

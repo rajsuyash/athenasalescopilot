@@ -18,13 +18,13 @@ Exits non-zero if any **gated** metric drops below its threshold.
 
 Recall is _"would this objection even reach the LLM?"_ — the urgency gate is the thing that once suppressed **98/98** customer turns in prod. A regex or threshold change that leaks objections shows up here immediately.
 
-## The baseline finding (why the gate is 40%, not 80%)
+## What F20 fixed (EN recall 45% → ~100%)
 
-Current **EN recall is ~45%** — the English regex gate misses more than half of realistic objections. Single-signal turns (e.g. _"I'll have to run this by my boss"_, _"you're being pushy"_, _"now isn't a good time"_) score ~0.30 and fall under the 0.35 threshold. This is the **A4** weakness quantified.
+This harness first measured **EN recall at ~45%** — the regex gate missed more than half of realistic objections. Single-signal turns (_"I'll have to run this by my boss"_, _"you're being pushy"_, _"now isn't a good time"_) scored ~0.30 and fell under the 0.35 urgency threshold — the **A4** weakness, quantified.
 
-So the gate is a **characterization baseline** (40%, just under current) — it locks in today's behavior and fails on a _regression_, while the report prints the real number and the exact misses. **Target is 80%**, reached when **F20** (semantic intent classifier) replaces regex-only gating. Ratchet `EN_RECALL_GATE` up as F20 lands.
+**F20** fixed it: objections now **bypass the urgency gate** (`classifyHeuristic().isObjection` — the gate exists for cost control on generic chatter, not to filter objections) and the objection patterns were widened using the exact misses this eval printed. EN recall is now **~100%**, so `EN_RECALL_GATE` is raised to **0.90** — it now guards against a real regression rather than characterizing a broken baseline.
 
-French recall (~10%) is reported for information only — the regex is English-only (also F20).
+French recall (~10%) is still English-only regex — informational, and the next target (FR intent, F20-FR).
 
 ## Extending
 

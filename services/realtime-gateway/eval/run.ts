@@ -40,14 +40,13 @@ const load = (f: string): unknown => JSON.parse(readFileSync(join(HERE, 'fixture
 const URGENCY_THRESHOLD = Number(process.env.URGENCY_THRESHOLD ?? 0.35);
 
 // Gates. Below these → non-zero exit.
-// EN_RECALL is a CHARACTERIZATION baseline: the English regex gate currently
-// catches ~45% of realistic objections (single-signal turns score ~0.30 and
-// miss the 0.35 threshold — the A4 weakness). The gate is set just below that
-// so it locks in current behavior and fails on a REGRESSION, while the report
-// shows the real number and misses. TARGET is 0.80 once F20 (semantic intent
-// classifier) replaces regex-only gating — ratchet this up then.
-const EN_RECALL_GATE = 0.4;
-const EN_RECALL_TARGET = 0.8;
+// F20 raised EN objection-detection recall from ~45% to ~100% by making
+// objections bypass the urgency gate (isObjection) and widening the objection
+// patterns. Gate is set with headroom below current so new fixtures can be
+// added without instantly failing, but a real regression trips it. FR is still
+// English-only (~10%) — informational until FR intent lands (F20-FR).
+const EN_RECALL_GATE = 0.9;
+const EN_RECALL_TARGET = 0.95;
 const EPISODE_GATE = 1.0;
 
 interface ObjectionItem {
@@ -69,7 +68,10 @@ let frTotal = 0;
 const misses: ObjectionItem[] = [];
 
 for (const item of objections) {
-  const fires = classifyHeuristic(item.text).urgencyScore >= URGENCY_THRESHOLD;
+  // Mirror the live gate (coach.ts): objections bypass the urgency threshold;
+  // everything else must clear it. "Fires" = would reach the LLM.
+  const intent = classifyHeuristic(item.text);
+  const fires = intent.isObjection || intent.urgencyScore >= URGENCY_THRESHOLD;
   const bucket = byArchetype.get(item.archetype) ?? { hit: 0, total: 0 };
   bucket.total += 1;
   if (fires) bucket.hit += 1;
