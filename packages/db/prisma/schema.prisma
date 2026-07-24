@@ -63,6 +63,7 @@ model Workspace {
   retentionPolicies  RetentionPolicy[]
   invites            Invite[]
   bmc                WorkspaceBmc?
+  objectionEpisodes  ObjectionEpisode[]
 
   @@map("workspaces")
 }
@@ -203,6 +204,7 @@ model Meeting {
   intentEvents       IntentEvent[]
   suggestions        Suggestion[]
   summary            MeetingSummary?
+  objectionEpisodes  ObjectionEpisode[]
 
   @@index([workspaceId, startedAt])
   @@index([workspaceId, hostUserId])
@@ -257,6 +259,38 @@ model Turn {
 
   @@index([meetingId, startMs])
   @@map("turns")
+}
+
+/// F18 — one objection "episode": the lifecycle of a single objection from
+/// the moment the prospect raises it until it resolves or is abandoned. Lets
+/// the live coach run the Socratic reframe loop STATEFULLY (give the rep the
+/// NEXT step, not a disconnected one-liner) instead of treating every turn as
+/// independent. Tenant-scoped by workspace_id (F10).
+model ObjectionEpisode {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  meetingId    String    @map("meeting_id") @db.Uuid
+  /// Turn that opened the episode. Scalar (no FK relation) — same meeting.
+  openedTurnId String    @map("opened_turn_id") @db.Uuid
+  /// price | stall | authority | comparison | time | skepticism | self_doubt | resistance | avoidance
+  archetype    String
+  /// disarm | isolate | uncover | reframe | justify | consequence | identity_close
+  currentStep  String    @default("disarm") @map("current_step")
+  /// Named reframe from the library once one is chosen (e.g. "opportunity_cost").
+  reframeUsed  String?   @map("reframe_used")
+  /// How many times the prospect deflected mid-loop. ≥2 → fall back to answer mode.
+  deflections  Int       @default(0)
+  /// open | resolved | abandoned
+  status       String    @default("open")
+  openedAt     DateTime  @default(now()) @map("opened_at")
+  closedAt     DateTime? @map("closed_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  meeting   Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, meetingId, status])
+  @@map("objection_episodes")
 }
 
 model IntentEvent {

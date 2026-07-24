@@ -259,6 +259,37 @@ const OBJECTION_INTENT_CATEGORIES = new Set<IntentCategory>([
 
 const OBJECTION_CATEGORY_PREFIX = 'objection-handling-';
 
+/** How many chunks to carry into the LLM prompt. The orchestrator uses 5;
+ *  the live path was cut to 3 during the latency overhaul, which starved
+ *  objection turns of the reframe-library + matrix chunks that must compete
+ *  with generic FAQ hits. 5 restores headroom without materially growing the
+ *  prompt (chunks are ~500 tokens). */
+const RETRIEVAL_TOP_K = 5;
+
+/** How many prior turns the reactive prompt carries. The model needs enough
+ *  history to locate itself in the objection loop (did the rep already
+ *  disarm? did the prospect concede value?). 3 was too shallow to pick the
+ *  correct NEXT step. */
+const REACTIVE_CONTEXT_TURNS = 6;
+
+/** Merge objection-restricted rows ahead of general rows, dedup by id
+ *  (first occurrence wins, preserving objection-first order), and cap to
+ *  `limit`. Pure — exported for unit testing the ranking contract. */
+export function mergeObjectionFirst<T extends { id: string }>(
+  objectionRows: readonly T[],
+  generalRows: readonly T[],
+  limit: number,
+): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of [...objectionRows, ...generalRows]) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    out.push(r);
+  }
+  return out.slice(0, limit);
+}
+
 /** One hybrid (semantic + trigram) pass, optionally restricted to a document
  *  category prefix. workspace_id is the FIRST predicate (F10). */
 async function retrievePass(
@@ -337,18 +368,14 @@ async function retrieve(
     // over a generic chunk even at a slightly lower score. Mirrors the
     // orchestrator's two-pass.
     const [objectionRows, generalRows] = await Promise.all([
-      retrievePass(workspaceId, qVec, query, language, OBJECTION_CATEGORY_PREFIX, 3),
-      retrievePass(workspaceId, qVec, query, language, null, 3),
+      retrievePass(workspaceId, qVec, query, language, OBJECTION_CATEGORY_PREFIX, RETRIEVAL_TOP_K),
+      retrievePass(workspaceId, qVec, query, language, null, RETRIEVAL_TOP_K),
     ]);
-    const seen = new Set<string>();
-    rows = [];
-    for (const r of [...objectionRows, ...generalRows]) {
-      if (seen.has(r.id)) continue;
-      seen.add(r.id);
-      rows.push(r);
-    }
+    // Objection-first ordering (matrix/reframe chunks lead), deduped and
+    // capped so the prompt doesn't balloon to 2×TOP_K.
+    rows = mergeObjectionFirst(objectionRows, generalRows, RETRIEVAL_TOP_K);
   } else {
-    rows = await retrievePass(workspaceId, qVec, query, language, null, 3);
+    rows = await retrievePass(workspaceId, qVec, query, language, null, RETRIEVAL_TOP_K);
   }
 
   const minScore = Number(process.env.RETRIEVAL_MIN_SCORE ?? 0.1);
@@ -365,6 +392,66 @@ async function retrieve(
     }));
 }
 
+// ─── F18: objection episode state machine ──────────────────────────────────
+//
+// An "episode" is one objection tracked across turns so the coach gives the
+// NEXT step of the Socratic reframe loop instead of a disconnected one-liner.
+// The LLM already reads the turn + context; we let it ALSO report where the
+// objection is in the loop (one call, zero extra latency). The handler holds
+// the open episode in memory and threads it back each turn for continuity.
+
+export const OBJECTION_ARCHETYPES = [
+  'price',
+  'stall',
+  'authority',
+  'comparison',
+  'time',
+  'skepticism',
+  'self_doubt',
+  'resistance',
+  'avoidance',
+] as const;
+export type ObjectionArchetype = (typeof OBJECTION_ARCHETYPES)[number];
+
+export const LOOP_STEPS = [
+  'disarm',
+  'isolate',
+  'uncover',
+  'reframe',
+  'justify',
+  'consequence',
+  'identity_close',
+] as const;
+export type LoopStep = (typeof LOOP_STEPS)[number];
+
+/** After this many prospect deflections mid-loop, stop reframing and fall back
+ *  to plain answer/coach mode (per the skill's "If they deflect" guidance). */
+const MAX_DEFLECTIONS = 2;
+
+/** In-memory episode state the handler threads across turns for one meeting. */
+export interface EpisodeState {
+  id: string;
+  archetype: ObjectionArchetype;
+  currentStep: LoopStep;
+  reframeUsed: string | null;
+  deflections: number;
+}
+
+/** The episode block the LLM appends when the turn is objection-related. All
+ *  fields optional so non-objection turns can omit it entirely. */
+const EpisodeReport = z.object({
+  is_objection: z.boolean(),
+  archetype: z.enum(OBJECTION_ARCHETYPES).nullable().optional(),
+  step: z.enum(LOOP_STEPS).nullable().optional(),
+  /** open = keep working the loop; resolved = prospect satisfied; abandoned =
+   *  prospect moved on / disengaged. */
+  status: z.enum(['open', 'resolved', 'abandoned']).optional(),
+  /** Set when the model picks a named reframe (e.g. "opportunity_cost"). */
+  reframe: z.string().nullable().optional(),
+  /** True when this turn is the prospect deflecting away from the reframe. */
+  deflected: z.boolean().optional(),
+});
+
 const SuggestSchema = z.object({
   type: z.enum(['answer', 'ask_next', 'coach', 'risk']),
   answer_text: z.string().nullable(),
@@ -372,6 +459,7 @@ const SuggestSchema = z.object({
   source_chunk_ids: z.array(z.string()).default([]),
   confidence: z.number().min(0).max(1),
   rationale: z.string(),
+  episode: EpisodeReport.optional(),
 });
 
 const SUGGEST_SYSTEM = `You are an expert sales coach whispering to the rep on a live call. The
@@ -380,14 +468,50 @@ prospect just spoke — generate ONE grounded, contextual suggestion.
 You have two context sources:
 1. APPROVED CHUNKS — verified facts about the product/company. Cite these
    when stating a factual claim about the product (price, integration,
-   security, timeline, etc).
+   security, timeline, etc). Chunks tagged "objection-handling-*" are the
+   workspace's reframe library and pre-baked objection→answer matrix.
 2. WORKSPACE PLAYBOOK (when present) — methodology and tone the rep
-   follows. Treat as a FRAMEWORK and SKILL. Internalize its sequencing
-   (e.g. isolate → reframe → tie back). DO NOT quote it verbatim. Adapt
-   the playbook's pattern to the actual prospect turn.
+   follows. Treat as a FRAMEWORK and SKILL. DO NOT quote it verbatim.
+
+OBJECTION HANDLING — the core skill. When the prospect turn is an objection
+(price / "too expensive", stall / "think about it", authority / "talk to my
+partner", time, skepticism / "got burned before", comparison / "other
+vendors", self-doubt, avoidance / "just send info"), do NOT answer with a
+generic rebuttal. The workspace runs the Socratic reframe loop:
+
+  DISARM → ISOLATE → UNCOVER → REFRAME → JUSTIFY → CONSEQUENCE → IDENTITY CLOSE
+
+Read the recent turns to find where this objection already is in the loop,
+then output the SINGLE NEXT step the rep should say right now — never the
+whole loop:
+- Objection just raised, nothing addressed yet → DISARM + ISOLATE
+  ("[concern] aside for a second, do you actually feel this gets you to
+  <their goal>?").
+- Value already confirmed → UNCOVER the real concern ("what's the real thing
+  you'd want to think through?").
+- Real concern surfaced → REFRAME using the matching reframe-library chunk,
+  in the prospect's own numbers/words.
+- Reframe landed / prospect conceded → JUSTIFY ("why do you think that is?")
+  — make them defend the new frame; do NOT re-explain it.
+- New frame justified → CONSEQUENCE (cost of staying the same) then IDENTITY
+  CLOSE (what the future version of them decides today).
+Pick ONE move. Ground any factual claim in a chunk; the reframe move itself
+is type "coach".
+
+EPISODE TRACKING. If an "OPEN OBJECTION EPISODE" block is present in the user
+message, this objection is already in progress — CONTINUE from the step shown
+(do NOT restart at disarm), keep the same archetype, and advance ONE step.
+Report the loop state in the "episode" field every turn:
+- Non-objection turn → {"is_objection": false}.
+- New objection, no open episode → is_objection true, set archetype + step
+  you just executed, status "open".
+- Continuing an open episode → is_objection true, same archetype, the step you
+  just advanced to, status "open" (or "resolved" if the prospect is satisfied,
+  "abandoned" if they disengaged / changed subject).
+- If the prospect just pushed back on your reframe, set "deflected": true.
 
 Output ONLY raw JSON (no markdown, no prose, no \`\`\` fences):
-{"type":"answer"|"ask_next"|"coach"|"risk","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>}
+{"type":"answer"|"ask_next"|"coach"|"risk","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>,"episode":{"is_objection":<bool>,"archetype":<price|stall|authority|comparison|time|skepticism|self_doubt|resistance|avoidance|null>,"step":<disarm|isolate|uncover|reframe|justify|consequence|identity_close|null>,"status":"open"|"resolved"|"abandoned","reframe":<str|null>,"deflected":<bool>}}
 
 Hard rules:
 - answer_text comes from CHUNKS only. NEVER invent facts.
@@ -395,8 +519,7 @@ Hard rules:
   chunk header. NEVER use bracket numbers like [1] or [2].
 - ≤30 words. Plain conversational English. No marketing language. No "I" voice.
 - The playbook is methodology, not source — never cite it as a chunk id.
-- Use the playbook's reframe pattern when the prospect raises an objection,
-  but generate fresh phrasing that fits THEIR words, not the script's.
+- One move per turn. Never stack two reframes or replay the whole loop.
 - Output raw JSON only. No text before or after the JSON object.`;
 
 // ─── Published script grounding ────────────────────────────────────────────
@@ -758,6 +881,7 @@ export async function proactiveCoach(
     },
     sources: [],
     suggestionId: row.id,
+    openEpisode: null,
   };
 }
 
@@ -798,6 +922,9 @@ export interface CoachInput {
    * followup_text) using extractStreamingAnswer below.
    */
   onPartialText?: (delta: string, accumulated: string) => void;
+  /** The objection episode currently open for this meeting (threaded by the
+   *  handler across turns), or null/undefined if none is open. */
+  openEpisode?: EpisodeState | null;
 }
 
 export interface CoachOutput {
@@ -813,6 +940,10 @@ export interface CoachOutput {
   intent: HeuristicResult & { source: 'heuristic' | 'llm' };
   sources: Array<{ id: string; documentName: string | null; score: number }>;
   suggestionId: string | null;
+  /** The objection episode after this turn — open EpisodeState to continue, or
+   *  null when no episode is open (never opened, or just closed). The handler
+   *  stores this and passes it back as `openEpisode` next turn. */
+  openEpisode: EpisodeState | null;
 }
 
 export interface CoachDeps {
@@ -823,6 +954,132 @@ export interface CoachDeps {
 }
 
 const POLICY_VERSION = 'policy-v1-gateway';
+
+/** Best-effort archetype when the model flags an objection but omits the
+ *  archetype. Maps the heuristic intent category to the closest loop archetype. */
+function mapIntentToArchetype(categories: readonly IntentCategory[]): ObjectionArchetype {
+  for (const c of categories) {
+    switch (c) {
+      case 'pricing':
+      case 'budget':
+        return 'price';
+      case 'authority':
+        return 'authority';
+      case 'timeline':
+        return 'time';
+      case 'competitor':
+        return 'comparison';
+    }
+  }
+  return 'stall';
+}
+
+export type EpisodeReportT = z.infer<typeof EpisodeReport>;
+
+export type EpisodeDecision =
+  | { kind: 'none' }
+  | { kind: 'open'; archetype: ObjectionArchetype; step: LoopStep; reframe: string | null }
+  | { kind: 'advance'; step: LoopStep; reframe: string | null; deflections: number }
+  | { kind: 'close'; status: 'resolved' | 'abandoned' };
+
+/** Pure decision: given the prior open episode (if any), the model's episode
+ *  report, and the heuristic intent, decide what to do with the episode. The
+ *  caller (coachAndPersist) performs the DB write. Exported for unit tests. */
+export function reconcileEpisode(
+  prior: EpisodeState | null | undefined,
+  report: EpisodeReportT | undefined,
+  intentCategories: readonly IntentCategory[],
+): EpisodeDecision {
+  // No signal from the model → don't disturb an open episode, do nothing new.
+  if (!report) return { kind: 'none' };
+
+  if (report.is_objection) {
+    if (!prior) {
+      return {
+        kind: 'open',
+        archetype: report.archetype ?? mapIntentToArchetype(intentCategories),
+        step: report.step ?? 'disarm',
+        reframe: report.reframe ?? null,
+      };
+    }
+    if (report.status === 'resolved' || report.status === 'abandoned') {
+      return { kind: 'close', status: report.status };
+    }
+    return {
+      kind: 'advance',
+      step: report.step ?? prior.currentStep,
+      reframe: report.reframe ?? prior.reframeUsed,
+      deflections: prior.deflections + (report.deflected ? 1 : 0),
+    };
+  }
+
+  // Turn is not an objection. If an episode was open, the prospect either
+  // accepted (resolved) or moved on (abandoned). Trust an explicit resolved;
+  // otherwise treat a topic change as abandoned.
+  if (prior) {
+    return { kind: 'close', status: report.status === 'resolved' ? 'resolved' : 'abandoned' };
+  }
+  return { kind: 'none' };
+}
+
+/** Persist an episode decision and return the episode state to carry into the
+ *  next turn (null when none is open). Best-effort: a DB hiccup here must never
+ *  fail the suggestion, so the caller wraps this in try/catch. */
+async function applyEpisodeDecision(
+  decision: EpisodeDecision,
+  input: CoachInput,
+  prior: EpisodeState | null | undefined,
+): Promise<EpisodeState | null> {
+  switch (decision.kind) {
+    case 'none':
+      return prior ?? null;
+    case 'open': {
+      const row = await prisma.objectionEpisode.create({
+        data: {
+          workspaceId: input.workspaceId,
+          meetingId: input.meetingId,
+          openedTurnId: input.turnId,
+          archetype: decision.archetype,
+          currentStep: decision.step,
+          reframeUsed: decision.reframe,
+        },
+      });
+      return {
+        id: row.id,
+        archetype: decision.archetype,
+        currentStep: decision.step,
+        reframeUsed: decision.reframe,
+        deflections: 0,
+      };
+    }
+    case 'advance': {
+      if (!prior) return null;
+      await prisma.objectionEpisode.update({
+        where: { id: prior.id },
+        data: {
+          currentStep: decision.step,
+          reframeUsed: decision.reframe,
+          deflections: decision.deflections,
+        },
+      });
+      return {
+        ...prior,
+        currentStep: decision.step,
+        reframeUsed: decision.reframe,
+        deflections: decision.deflections,
+      };
+    }
+    case 'close': {
+      if (prior) {
+        await prisma.objectionEpisode.update({
+          where: { id: prior.id },
+          data: { status: decision.status, closedAt: new Date() },
+        });
+      }
+      return null;
+    }
+  }
+}
 
 export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promise<CoachOutput> {
   if (!input.workspaceId) throw new Error('workspaceId required');
@@ -845,7 +1102,11 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       latencyMs: Date.now() - tStart,
       degraded: true,
     });
-    return suppressed(intent, 'urgency below threshold');
+    // Preserve any open episode — a low-urgency turn doesn't end the objection.
+    return {
+      ...suppressed(intent, 'urgency below threshold'),
+      openEpisode: input.openEpisode ?? null,
+    };
   }
 
   const cat = intent.categories.find((c) => c !== 'none') ?? null;
@@ -880,11 +1141,12 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       stage: 'coach_total',
       latencyMs: Date.now() - tStart,
     });
-    return askNext(intent, cat);
+    return { ...askNext(intent, cat), openEpisode: input.openEpisode ?? null };
   }
 
   const tSuggest = Date.now();
   let out: CoachOutput;
+  let episodeReport: EpisodeReportT | undefined;
   if (!deps.llm) {
     out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence);
   } else {
@@ -892,11 +1154,18 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       `Customer turn:\n${input.customerText}`,
       input.contextTurns.length
         ? `Context:\n${input.contextTurns
-            .slice(-3)
+            .slice(-REACTIVE_CONTEXT_TURNS)
             .map((t) => `${t.speaker.toUpperCase()}: ${t.text}`)
             .join('\n')}`
         : null,
       `Intent: categories=${intent.categories.join(',')} stage=${intent.stageSignal} urgency=${intent.urgencyScore.toFixed(2)}`,
+      input.openEpisode
+        ? `OPEN OBJECTION EPISODE — continue this, do NOT restart at disarm:\narchetype=${input.openEpisode.archetype} current_step=${input.openEpisode.currentStep}${input.openEpisode.reframeUsed ? ` reframe=${input.openEpisode.reframeUsed}` : ''}${
+            input.openEpisode.deflections >= MAX_DEFLECTIONS
+              ? '\nProspect has deflected twice — STOP reframing; give a direct answer or concede and offer a concrete next step.'
+              : ''
+          }`
+        : null,
       scriptBody
         ? `Workspace playbook for stage=${intent.stageSignal} (METHODOLOGY — internalize the pattern and adapt to the prospect's actual words; DO NOT quote verbatim; never cite as a chunk):\n${scriptBody}`
         : null,
@@ -930,6 +1199,9 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
     if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
       out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence, 'llm fallback');
     } else {
+      // Capture the objection-loop report regardless of source-citation
+      // validity — the objection progression is independent of grounding.
+      episodeReport = r.parsed.episode;
       const claimed = r.parsed.source_chunk_ids ?? [];
       const allowed = new Set(chunks.map((c) => c.id));
       const cleaned = claimed.filter((id) => allowed.has(id));
@@ -954,9 +1226,19 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
             .filter((c) => (cleaned.length > 0 ? cleaned.includes(c.id) : c === chunks[0]))
             .map((c) => ({ id: c.id, documentName: c.documentName, score: c.score })),
           suggestionId: null,
+          openEpisode: null, // set by reconcileEpisode below
         };
       }
     }
+  }
+
+  // Reconcile the objection episode from the model's report. Best-effort —
+  // never let episode bookkeeping fail the suggestion.
+  try {
+    const decision = reconcileEpisode(input.openEpisode, episodeReport, intent.categories);
+    out.openEpisode = await applyEpisodeDecision(decision, input, input.openEpisode);
+  } catch {
+    out.openEpisode = input.openEpisode ?? null;
   }
 
   // Persist if there's something worth keeping.
@@ -1019,6 +1301,7 @@ function heuristicAnswer(
     intent: { ...intent, source: 'heuristic' },
     sources: [{ id: top.id, documentName: top.documentName, score: top.score }],
     suggestionId: null,
+    openEpisode: null,
   };
 }
 
@@ -1044,6 +1327,7 @@ function askNext(intent: HeuristicResult, category: string | null): CoachOutput 
     intent: { ...intent, source: 'heuristic' },
     sources: [],
     suggestionId: null,
+    openEpisode: null,
   };
 }
 
@@ -1061,6 +1345,7 @@ function suppressed(intent: HeuristicResult, reason: string): CoachOutput {
     intent: { ...intent, source: 'heuristic' },
     sources: [],
     suggestionId: null,
+    openEpisode: null,
   };
 }
 
