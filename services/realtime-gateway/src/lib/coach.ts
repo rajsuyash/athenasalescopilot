@@ -176,6 +176,22 @@ const KEYWORDS: Record<Exclude<IntentCategory, 'none'>, RegExp[]> = {
     // Comparison — incumbent already in place.
     /\balready (?:have|use|using|got|on)\b/i,
     /\bdifferent (?:tool|vendor|solution|system|platform)\b/i,
+    // French objections (admin-web ships EN/FR; FR reps are real users).
+    /trop cher/i,
+    /dépasse.*budget/i,
+    /réfléchir/i,
+    /y penser/i,
+    /besoin (?:d'|de )penser/i,
+    /en parler (?:à|a)/i,
+    /valid(?:e|er|ez) avec/i,
+    /comparer/i,
+    /d'?autres fournisseurs/i,
+    /utilis(?:e|er) déjà/i,
+    /déjà un autre/i,
+    /pas le temps/i,
+    /fait avoir/i,
+    /pas sûr/i,
+    /trop occupé/i,
   ],
   technical_validation: [
     /\bbenchmark/i,

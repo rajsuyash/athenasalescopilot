@@ -24,7 +24,7 @@ This harness first measured **EN recall at ~45%** — the regex gate missed more
 
 **F20** fixed it: objections now **bypass the urgency gate** (`classifyHeuristic().isObjection` — the gate exists for cost control on generic chatter, not to filter objections) and the objection patterns were widened using the exact misses this eval printed. EN recall is now **~100%**, so `EN_RECALL_GATE` is raised to **0.90** — it now guards against a real regression rather than characterizing a broken baseline.
 
-French recall (~10%) is still English-only regex — informational, and the next target (FR intent, F20-FR).
+**F20-FR** then added French objection patterns, taking FR recall from ~10% to ~100% — so FR is now gated (0.85) too, not just informational.
 
 ## Extending
 

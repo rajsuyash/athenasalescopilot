@@ -135,3 +135,16 @@ test('formatBusinessContext: null/empty in → null out (no block injected)', ()
   assert.equal(formatBusinessContext({}), null);
   assert.equal(formatBusinessContext({ niche: '   ', usp: 42 as unknown as string }), null);
 });
+
+test('classifyHeuristic: French objections are flagged (F20-FR)', () => {
+  for (const t of [
+    "C'est beaucoup trop cher pour nous en ce moment.",
+    'Laissez-moi y réfléchir et je reviens vers vous.',
+    'Je dois en parler à mon associé avant de décider.',
+    'Il faut que je valide avec ma direction.',
+    'On utilise déjà un autre outil pour ça.',
+    "Je n'ai vraiment pas le temps en ce moment.",
+  ]) {
+    assert.equal(classifyHeuristic(t).isObjection, true, t);
+  }
+});
