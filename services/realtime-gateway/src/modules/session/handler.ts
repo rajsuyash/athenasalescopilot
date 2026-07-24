@@ -211,6 +211,11 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     const sessionId = crypto.randomUUID();
     let lastFrameAt = Date.now();
     let inflightCoach = false;
+    // Abort handle for the in-flight coach call — a newer customer turn
+    // supersedes a stale one instead of queueing behind it (fragmented turns
+    // made replies feel 3-4s late: the answer to the full thought waited for
+    // the partial-fragment call to finish).
+    let coachAbort: AbortController | null = null;
     let pending: { customerText: string; turnId: string; turnReady: Promise<void> } | null = null;
     // log is rebound after auth-frame completes so workspaceId is logged.
     let log = req.log.child(
@@ -309,6 +314,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       const { customerText, turnId, turnReady } = pending;
       pending = null;
       inflightCoach = true;
+      coachAbort = new AbortController();
       // Phase 2.2: tracks the last streaming text we sent so we only
       // emit deltas (not the full accumulated text) on each frame. The
       // overlay appends each delta to the in-flight card.
@@ -329,6 +335,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             recentSuggestions: recentSuggestions.slice(0, 8),
             establishedFacts,
             turnReady,
+            abortSignal: coachAbort.signal,
             onPartialText: (_delta, accumulated) => {
               // Anthropic streams raw JSON tokens. We extract just the
               // user-visible answer_text / followup_text portions and
@@ -382,6 +389,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         });
       } finally {
         inflightCoach = false;
+        coachAbort = null;
         if (pending) void drainPending();
       }
     };
@@ -551,6 +559,8 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           log.warn({ err }, 'turn persist failed');
         });
       pending = { customerText: seg.text, turnId, turnReady };
+      // A newer complete thought supersedes the stale in-flight call.
+      if (inflightCoach && coachAbort) coachAbort.abort();
       void drainPending();
     };
 

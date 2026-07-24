@@ -24,7 +24,13 @@ export interface QualityStats {
   totalScored: number;
   usefulRate: number;
   byType: Array<{ type: string; useful: number; notUseful: number; rate: number }>;
-  bySource: Array<{ documentName: string; useful: number; notUseful: number; rate: number; n: number }>;
+  bySource: Array<{
+    documentName: string;
+    useful: number;
+    notUseful: number;
+    rate: number;
+    n: number;
+  }>;
 }
 
 export interface CoverageStats {
@@ -57,6 +63,9 @@ const LATENCY_BUDGETS: Record<string, number> = {
   // Script fetch is in-process cache (25s TTL) after warmup; cold DB hit is
   // 30-80ms. 100ms is the soft budget — anything higher is a Prisma stall.
   script_fetch: 100,
+  // Time to FIRST streamed token of the coach reply — the number the rep
+  // feels. Voice-agent parity target.
+  llm_ttft: 800,
   suggestion: 3000,
   coach_total: 2000,
 };
@@ -107,7 +116,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HIGH_CONF = 0.7;
 const LOW_CONF = 0.4;
 
-export async function adoption(workspaceId: string, now: Date = new Date()): Promise<AdoptionStats> {
+export async function adoption(
+  workspaceId: string,
+  now: Date = new Date(),
+): Promise<AdoptionStats> {
   const last7d = new Date(now.getTime() - 7 * DAY_MS);
   const last30d = new Date(now.getTime() - 30 * DAY_MS);
 
@@ -204,7 +216,7 @@ export async function quality(workspaceId: string, days = 30): Promise<QualitySt
       notUseful: v.notUseful,
       rate: v.useful / Math.max(1, v.useful + v.notUseful),
     }))
-    .sort((a, b) => (b.useful + b.notUseful) - (a.useful + a.notUseful));
+    .sort((a, b) => b.useful + b.notUseful - (a.useful + a.notUseful));
 
   // Source attribution: aggregate by document via the chunks → version → doc chain.
   const allChunkIds = scored.flatMap((s) => s.sourceChunkIds);

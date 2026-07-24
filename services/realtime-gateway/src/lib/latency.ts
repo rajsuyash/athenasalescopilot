@@ -12,6 +12,7 @@ export type LatencyStage =
   | 'intent'
   | 'retrieval'
   | 'script_fetch'
+  | 'llm_ttft'
   | 'suggestion'
   | 'coach_total';
 

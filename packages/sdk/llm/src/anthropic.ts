@@ -1,9 +1,4 @@
-import type {
-  LlmClient,
-  LlmCompleteRequest,
-  LlmCompleteResult,
-  LlmMessage,
-} from './types.js';
+import type { LlmClient, LlmCompleteRequest, LlmCompleteResult, LlmMessage } from './types.js';
 
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS = 1024;
@@ -35,6 +30,10 @@ export class AnthropicLlmClient implements LlmClient {
     const ac = new AbortController();
     const deadline = req.deadlineMs ?? 30_000;
     const timer = setTimeout(() => ac.abort(), deadline);
+    if (req.signal) {
+      if (req.signal.aborted) ac.abort();
+      else req.signal.addEventListener('abort', () => ac.abort(), { once: true });
+    }
     const startedAt = Date.now();
 
     try {
@@ -243,19 +242,31 @@ function splitMessages(messages: LlmMessage[]): { system: string | null; others:
 
 function tryJson(text: string): unknown {
   // 1. Try plain parse first (model returned raw JSON).
-  try { return JSON.parse(text.trim()); } catch { /* continue */ }
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    /* continue */
+  }
 
   // 2. Accept a fenced ```json ... ``` block.
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced?.[1]) {
-    try { return JSON.parse(fenced[1].trim()); } catch { /* continue */ }
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {
+      /* continue */
+    }
   }
 
   // 3. Extract the first top-level JSON object from free-form text.
   // This handles cases where the model emits prose before/after the JSON.
   const objMatch = text.match(/\{[\s\S]*\}/);
   if (objMatch) {
-    try { return JSON.parse(objMatch[0]); } catch { /* continue */ }
+    try {
+      return JSON.parse(objMatch[0]);
+    } catch {
+      /* continue */
+    }
   }
 
   return null;

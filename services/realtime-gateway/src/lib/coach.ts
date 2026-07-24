@@ -1187,6 +1187,8 @@ export interface CoachInput {
    *  insert without blocking the coach; we only await it right before the
    *  suggestion insert (FK on turns) — by then it has long committed. */
   turnReady?: Promise<void>;
+  /** Cancels this coach run (e.g. a newer customer turn superseded it). */
+  abortSignal?: AbortSignal;
   /** Facts the prospect has established so far this call (accumulated by the
    *  handler from prior turns' `newFacts`). Pinned into the prompt so the
    *  coach never re-asks answered ground — even reworded. */
@@ -1433,6 +1435,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   }
 
   const tSuggest = Date.now();
+  let ttftEmitted = false;
   let out: CoachOutput;
   let episodeReport: EpisodeReportT | undefined;
   if (!deps.llm) {
@@ -1474,7 +1477,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       `Approved chunks (use the UUID after "CHUNK_ID:" in source_chunk_ids — never the bracket number):\n\n${chunks
         .map(
           (c, i) =>
-            `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text}`,
+            `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text.length > 700 ? `${c.text.slice(0, 700)}…` : c.text}`,
         )
         .join('\n\n')}`,
     ]
@@ -1491,14 +1494,37 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       temperature: 0.2,
       maxTokens: 400,
       deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 8000),
+      ...(input.abortSignal ? { signal: input.abortSignal } : {}),
       // Phase 2.2: forward streaming text deltas to the gateway handler so
       // it can emit `suggestion.streaming` WS frames. The model writes JSON;
       // extractStreamingAnswer() parses partial JSON to surface user-visible
       // text (answer_text / followup_text) only.
-      ...(input.onPartialText ? { onPartialText: input.onPartialText } : {}),
+      ...(input.onPartialText
+        ? {
+            onPartialText: (d: string, a: string) => {
+              if (!ttftEmitted) {
+                ttftEmitted = true;
+                emitLatency({
+                  workspaceId: input.workspaceId,
+                  meetingId: input.meetingId,
+                  stage: 'llm_ttft',
+                  latencyMs: Date.now() - tSuggest,
+                });
+              }
+              input.onPartialText?.(d, a);
+            },
+          }
+        : {}),
     });
 
-    if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
+    if (r.finishReason === 'cancelled' && input.abortSignal?.aborted) {
+      // Superseded by a newer customer turn — say nothing; the fresh call
+      // answers the complete thought. Keep the episode as-is.
+      out = {
+        ...suppressed(intent, 'superseded by newer turn'),
+        openEpisode: input.openEpisode ?? null,
+      };
+    } else if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
       out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence, 'llm fallback');
     } else {
       // Capture the objection-loop report regardless of source-citation

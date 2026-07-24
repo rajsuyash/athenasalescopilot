@@ -14,6 +14,9 @@ export interface LlmCompleteRequest<T = unknown> {
   temperature?: number;
   /** Hard server-side deadline. Cancels in-flight on breach. */
   deadlineMs?: number;
+  /** External cancellation — e.g. the gateway superseding a stale coach call
+   *  when a newer customer turn arrives. Composed with the deadline. */
+  signal?: AbortSignal;
   traceId?: string;
   /**
    * Token-streaming callback. When set, the SDK enables streaming on the
