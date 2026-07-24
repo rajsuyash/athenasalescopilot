@@ -4,6 +4,7 @@ import {
   mergeObjectionFirst,
   reconcileEpisode,
   classifyHeuristic,
+  formatBusinessContext,
   type EpisodeState,
 } from './coach.js';
 
@@ -109,4 +110,28 @@ test('classifyHeuristic: benign turns are not flagged as objections', () => {
   ]) {
     assert.equal(classifyHeuristic(t).isObjection, false, t);
   }
+});
+
+test('formatBusinessContext: builds a labelled block from BMC sections in priority order', () => {
+  const block = formatBusinessContext({
+    passion: 'ignored',
+    niche: 'Mid-market SaaS founders',
+    problem: 'Churn from bad onboarding',
+    usp: 'Only tool with live call coaching',
+    pricing: '$499/mo per seat',
+    channel: 'ignored too',
+  });
+  assert.ok(block);
+  const lines = (block as string).split('\n');
+  assert.equal(lines[0], 'Who we sell to: Mid-market SaaS founders');
+  assert.ok((block as string).includes('Why us: Only tool with live call coaching'));
+  assert.ok((block as string).includes('Pricing: $499/mo per seat'));
+  // passion + channel are skipped (marketing-facing, not useful live).
+  assert.ok(!(block as string).includes('ignored'));
+});
+
+test('formatBusinessContext: null/empty in → null out (no block injected)', () => {
+  assert.equal(formatBusinessContext(null), null);
+  assert.equal(formatBusinessContext({}), null);
+  assert.equal(formatBusinessContext({ niche: '   ', usp: 42 as unknown as string }), null);
 });
