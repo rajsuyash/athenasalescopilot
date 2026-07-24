@@ -16,6 +16,7 @@ process.env.AUTO_RECAP = 'false';
 process.env.AUTO_END_MEETING = 'false';
 
 const { buildApp } = await import('./server.js');
+const { mintServiceToken, verifyTokenString } = await import('./lib/ws-auth.js');
 
 function port(app: FastifyInstance): number {
   const addr = app.server.address() as AddressInfo;
@@ -110,6 +111,17 @@ describe('realtime-gateway', () => {
     const m = await waitForType(ws, 'error');
     assert.equal(m.code, 'TOKEN_EXPIRED');
     assert.equal((await closed).code, 4011);
+  });
+
+  it('mintServiceToken produces a token that verifies and preserves tenant claims (recap 401 fix)', () => {
+    const s2s = mintServiceToken(app, validClaims);
+    const v = verifyTokenString(app, s2s);
+    assert.equal(v.ok, true);
+    if (v.ok) {
+      assert.equal(v.verified.claims.workspaceId, validClaims.workspaceId);
+      assert.equal(v.verified.claims.role, validClaims.role);
+      assert.equal(v.verified.claims.sub, validClaims.sub);
+    }
   });
 
   it('rejects bad hello payload with VALIDATION_ERROR (after authenticating)', async () => {

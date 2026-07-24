@@ -12,8 +12,14 @@ import {
   proactiveCoach,
   PROACTIVE_STAGES,
   type ProactiveTrigger,
+  type EpisodeState,
 } from '../../lib/coach.js';
-import { verifyWsToken, verifyTokenString, type AccessTokenClaims } from '../../lib/ws-auth.js';
+import {
+  verifyWsToken,
+  verifyTokenString,
+  mintServiceToken,
+  type AccessTokenClaims,
+} from '../../lib/ws-auth.js';
 
 // WS close codes for auth failures. ADDITIVE + backward-safe: 4001 keeps its
 // original "auth failed" meaning (deployed clients reconnect+refresh on any
@@ -150,7 +156,6 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     let claims: AccessTokenClaims | null = headerVerified.ok
       ? headerVerified.verified.claims
       : null;
-    let rawToken: string | null = headerVerified.ok ? headerVerified.verified.raw : null;
 
     // Auth-frame handshake: prompt the client and wait for the first
     // control message. Anything else (binary audio, hello, set_rep) before
@@ -204,6 +209,10 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     let lastSuggestionAt = 0;
     let openingFired = false;
     let currentStage = 'opener';
+    // F18: the objection episode currently open for this meeting (or null).
+    // coachAndPersist reads it, advances the reframe loop, and returns the
+    // next state; we thread it back on the following customer turn.
+    let openEpisode: EpisodeState | null = null;
     let proactiveTick: ReturnType<typeof setInterval> | null = null;
     // Last ~8 proactive suggestions emitted; passed back into the coach so
     // it doesn't repeat itself when the rep stays silent.
@@ -236,18 +245,22 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       // Run end-of-call work (end meeting + recap) before closing the socket,
       // so the client can still receive `recap.ready` while the WS is open.
       const meetingForRecap = meetingId;
+      const recapClaims = claims;
       const fireRecap = async (): Promise<void> => {
-        if (!meetingForRecap || !rawToken) return;
+        if (!meetingForRecap || !recapClaims) return;
+        // Mint a fresh s2s token — the WS token that authed this session may
+        // have expired during a long call, which 401'd end + recap in prod.
+        const s2sToken = mintServiceToken(app, recapClaims);
         if (deps.autoEndMeeting) {
           try {
-            await endMeeting(deps.apiUrl, rawToken, meetingForRecap);
+            await endMeeting(deps.apiUrl, s2sToken, meetingForRecap);
           } catch (err) {
             log.warn({ err }, 'autoEndMeeting failed');
           }
         }
         if (!deps.autoRecap) return;
         try {
-          const recap = await runRecap(deps.postcallUrl, rawToken, meetingForRecap);
+          const recap = await runRecap(deps.postcallUrl, s2sToken, meetingForRecap);
           sendJson(socket, { type: 'recap.ready', recap });
         } catch (err) {
           log.warn({ err }, 'autoRecap failed');
@@ -287,7 +300,10 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             meetingId,
             turnId,
             customerText,
-            contextTurns: rolling.slice(-3),
+            // Reactive coach needs enough history to locate the objection in
+            // the reframe loop (coach.ts re-slices to REACTIVE_CONTEXT_TURNS).
+            contextTurns: rolling.slice(-8),
+            openEpisode,
             onPartialText: (_delta, accumulated) => {
               // Anthropic streams raw JSON tokens. We extract just the
               // user-visible answer_text / followup_text portions and
@@ -311,6 +327,8 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           deps,
         );
         lastSuggestionAt = Date.now();
+        // Carry the objection-loop state into the next customer turn.
+        openEpisode = r.openEpisode;
         sendJson(socket, { type: 'suggestion.generated', suggestion: r });
       } catch (err) {
         log.error({ err }, 'coach failed');
@@ -491,7 +509,6 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           return;
         }
         claims = v.verified.claims;
-        rawToken = v.verified.raw;
         authResolved = true;
         if (authTimer) {
           clearTimeout(authTimer);
