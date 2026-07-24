@@ -360,6 +360,33 @@ export function mergeObjectionFirst<T extends { id: string }>(
   return out.slice(0, limit);
 }
 
+/** Merge newly-extracted facts into the accumulated list: trims, dedupes on
+ *  normalized text, caps at `max` (oldest dropped first). Pure — exported
+ *  for unit tests. */
+export function mergeFacts(
+  existing: readonly string[],
+  fresh: readonly string[],
+  max = 20,
+): string[] {
+  const norm = (x: string): string =>
+    x
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const out = [...existing];
+  const seen = new Set(existing.map(norm));
+  for (const f of fresh) {
+    const t = f.trim();
+    if (t.length < 3) continue;
+    const n = norm(t);
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(t);
+  }
+  return out.length > max ? out.slice(out.length - max) : out;
+}
+
 /** One hybrid (semantic + trigram) pass, optionally restricted to a document
  *  category prefix. workspace_id is the FIRST predicate (F10). */
 async function retrievePass(
@@ -549,6 +576,12 @@ const SuggestSchema = z.object({
   confidence: z.number().min(0).max(1),
   rationale: z.string(),
   episode: EpisodeReport.optional(),
+  // Concrete facts the prospect just established THIS turn (e.g. "after-hours
+  // calls go to voicemail", "team is ~40 reps"). Accumulated by the handler
+  // and pinned into every later prompt so the coach NEVER re-asks answered
+  // ground — including rephrased variants lexical dedup can't catch
+  // (2026-07-24 field report: same after-hours question asked 3 ways).
+  new_facts: z.array(z.string().min(3).max(140)).max(4).default([]),
 });
 
 const SUGGEST_SYSTEM = `You are an expert sales coach whispering to the rep on a live call. The
@@ -573,6 +606,16 @@ B. SILENCE OVER NOISE. Only speak when you have something specific and clearly
    the chunks genuinely fits — return {"type":"none", answer_text:null,
    followup_text:null}. A blank overlay is better than a generic or off-topic
    line. Do NOT invent a suggestion to fill space.
+
+C. NEVER RE-ASK ANSWERED GROUND. The user message may carry an "ESTABLISHED
+   FACTS" list — things the prospect has already told the rep. Never ask about
+   any of them again, INCLUDING reworded variants of the same underlying
+   question. If your best next question would probe an established fact,
+   advance to a genuinely NEW topic instead, or return "none". Also report
+   "new_facts": any concrete fact the prospect established in THIS turn, as a
+   short plain statement ("after-hours calls go to voicemail", "team is ~40
+   reps", "budget is approved"). Empty array if none. Opinions, small talk,
+   and vague sentiment are not facts.
 
 You have two context sources:
 1. APPROVED CHUNKS — verified facts about the product/company. Cite these
@@ -623,7 +666,7 @@ Report the loop state in the "episode" field every turn:
 - If the prospect just pushed back on your reframe, set "deflected": true.
 
 Output ONLY raw JSON (no markdown, no prose, no \`\`\` fences):
-{"type":"answer"|"ask_next"|"coach"|"risk"|"none","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>,"episode":{"is_objection":<bool>,"archetype":<price|stall|authority|comparison|time|skepticism|self_doubt|resistance|avoidance|null>,"step":<disarm|isolate|uncover|reframe|justify|consequence|identity_close|null>,"status":"open"|"resolved"|"abandoned","reframe":<str|null>,"deflected":<bool>}}
+{"type":"answer"|"ask_next"|"coach"|"risk"|"none","answer_text":<str|null>,"followup_text":<str|null>,"source_chunk_ids":["<exact UUID from id= field>"],"confidence":<0..1>,"rationale":<short>,"episode":{"is_objection":<bool>,"archetype":<price|stall|authority|comparison|time|skepticism|self_doubt|resistance|avoidance|null>,"step":<disarm|isolate|uncover|reframe|justify|consequence|identity_close|null>,"status":"open"|"resolved"|"abandoned","reframe":<str|null>,"deflected":<bool>},"new_facts":[<short fact strings, usually empty>]}
 
 Hard rules:
 - answer_text / followup_text are the EXACT words the rep says out loud — never
@@ -886,6 +929,8 @@ export interface ProactiveInput {
   stage: string;
   trigger: ProactiveTrigger;
   contextTurns: Array<{ speaker: 'rep' | 'customer' | 'unknown'; text: string }>;
+  /** Facts the prospect already established — never re-ask, even reworded. */
+  establishedFacts?: string[];
   /** Recently emitted proactive followup texts (most-recent first). Coach
    *  uses these to avoid suggesting the same line twice and to detect when
    *  the rep already spoke a recent suggestion. */
@@ -976,6 +1021,11 @@ export async function proactiveCoach(
           .map((t) => `${t.speaker.toUpperCase()}: ${t.text}`)
           .join('\n')}`
       : 'No turns yet — call just started.',
+    input.establishedFacts?.length
+      ? `ESTABLISHED FACTS — the prospect already told the rep this. NEVER ask about any of it again, even reworded:\n${input.establishedFacts
+          .map((x, i) => `${i + 1}. ${x}`)
+          .join('\n')}`
+      : null,
     recent.length
       ? `Already suggested in this call (DO NOT repeat or paraphrase these — pick a DIFFERENT line from the script):\n${recent
           .slice(0, 5)
@@ -1084,6 +1134,7 @@ export async function proactiveCoach(
     },
     sources: [],
     suggestionId: row.id,
+    newFacts: [],
     openEpisode: null,
   };
 }
@@ -1136,6 +1187,10 @@ export interface CoachInput {
    *  insert without blocking the coach; we only await it right before the
    *  suggestion insert (FK on turns) — by then it has long committed. */
   turnReady?: Promise<void>;
+  /** Facts the prospect has established so far this call (accumulated by the
+   *  handler from prior turns' `newFacts`). Pinned into the prompt so the
+   *  coach never re-asks answered ground — even reworded. */
+  establishedFacts?: string[];
 }
 
 export interface CoachOutput {
@@ -1151,6 +1206,9 @@ export interface CoachOutput {
   intent: HeuristicResult & { source: 'heuristic' | 'llm' };
   sources: Array<{ id: string; documentName: string | null; score: number }>;
   suggestionId: string | null;
+  /** Facts the prospect established this turn (from the LLM report); the
+   *  handler accumulates them across turns. Empty when none. */
+  newFacts: string[];
   /** The objection episode after this turn — open EpisodeState to continue, or
    *  null when no episode is open (never opened, or just closed). The handler
    *  stores this and passes it back as `openEpisode` next turn. */
@@ -1399,6 +1457,11 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
               : ''
           }`
         : null,
+      input.establishedFacts?.length
+        ? `ESTABLISHED FACTS — the prospect already told the rep this. NEVER ask about any of it again, even reworded (rule C):\n${input.establishedFacts
+            .map((x, i) => `${i + 1}. ${x}`)
+            .join('\n')}`
+        : null,
       input.recentSuggestions?.length
         ? `Already suggested this call (do NOT repeat or rephrase these; if the prospect already answered one, never ask it again — return type "none" instead):\n${input.recentSuggestions
             .slice(0, 6)
@@ -1468,6 +1531,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
             .filter((c) => (cleaned.length > 0 ? cleaned.includes(c.id) : c === chunks[0]))
             .map((c) => ({ id: c.id, documentName: c.documentName, score: c.score })),
           suggestionId: null,
+          newFacts: r.parsed.new_facts ?? [],
           openEpisode: null, // set by reconcileEpisode below
         };
       }
@@ -1564,6 +1628,7 @@ function heuristicAnswer(
     intent: { ...intent, source: 'heuristic' },
     sources: [{ id: top.id, documentName: top.documentName, score: top.score }],
     suggestionId: null,
+    newFacts: [],
     openEpisode: null,
   };
 }
@@ -1594,6 +1659,7 @@ function askNext(intent: HeuristicResult, category: string | null): CoachOutput 
     intent: { ...intent, source: 'heuristic' },
     sources: [],
     suggestionId: null,
+    newFacts: [],
     openEpisode: null,
   };
 }
@@ -1612,6 +1678,7 @@ function suppressed(intent: HeuristicResult, reason: string): CoachOutput {
     intent: { ...intent, source: 'heuristic' },
     sources: [],
     suggestionId: null,
+    newFacts: [],
     openEpisode: null,
   };
 }

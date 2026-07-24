@@ -13,6 +13,7 @@ import {
   PROACTIVE_STAGES,
   type ProactiveTrigger,
   type EpisodeState,
+  mergeFacts,
 } from '../../lib/coach.js';
 import {
   verifyWsToken,
@@ -226,6 +227,9 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     let lastSuggestionAt = 0;
     let openingFired = false;
     let currentStage = 'opener';
+    // Facts the prospect has established this call — pinned into every coach
+    // prompt so no question gets re-asked, even reworded.
+    let establishedFacts: string[] = [];
     // F18: the objection episode currently open for this meeting (or null).
     // coachAndPersist reads it, advances the reframe loop, and returns the
     // next state; we thread it back on the following customer turn.
@@ -323,6 +327,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             contextTurns: rolling.slice(-12),
             openEpisode,
             recentSuggestions: recentSuggestions.slice(0, 8),
+            establishedFacts,
             turnReady,
             onPartialText: (_delta, accumulated) => {
               // Anthropic streams raw JSON tokens. We extract just the
@@ -348,6 +353,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         );
         // Carry the objection-loop state into the next customer turn.
         openEpisode = r.openEpisode;
+        if (r.newFacts.length > 0) establishedFacts = mergeFacts(establishedFacts, r.newFacts);
         if (r.display) {
           lastSuggestionAt = Date.now();
           // Remember what was shown so the coach never repeats it and never
@@ -430,6 +436,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             // the script line fits the conversation, not the script's order.
             contextTurns: rolling.slice(-8),
             recentSuggestions: recentSuggestions.slice(0, 8),
+            establishedFacts,
           },
           deps,
         );

@@ -6,6 +6,7 @@ import {
   classifyHeuristic,
   formatBusinessContext,
   isDuplicateOrSpoken,
+  mergeFacts,
   type EpisodeState,
 } from './coach.js';
 
@@ -174,4 +175,19 @@ test('isDuplicateOrSpoken: repeated suggestion and already-answered lines are ca
     isDuplicateOrSpoken('What would a successful rollout look like for you?', [], ctx),
     false,
   );
+});
+
+test('mergeFacts: dedupes reworded-identical facts, caps, keeps newest', () => {
+  const merged = mergeFacts(
+    ['after-hours calls go to voicemail', 'team is ~40 reps'],
+    ['After-hours calls go to voicemail!', 'budget is approved', '  '],
+  );
+  assert.deepEqual(merged, [
+    'after-hours calls go to voicemail',
+    'team is ~40 reps',
+    'budget is approved',
+  ]);
+  // Cap drops oldest first.
+  const capped = mergeFacts(['fact one', 'fact two', 'fact three'], ['fact four'], 3);
+  assert.deepEqual(capped, ['fact two', 'fact three', 'fact four']);
 });
