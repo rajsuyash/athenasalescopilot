@@ -158,14 +158,14 @@ const STAGE_KEYWORDS: Record<StageSignal, RegExp[]> = {
   closing: [/\bnext step/i, /\bfollow up\b/i, /\bcontract\b/i, /\bsend over\b/i],
 };
 
-interface HeuristicResult {
+export interface HeuristicResult {
   categories: IntentCategory[];
   stageSignal: StageSignal;
   urgencyScore: number;
   confidence: number;
 }
 
-function classifyHeuristic(text: string): HeuristicResult {
+export function classifyHeuristic(text: string): HeuristicResult {
   const t = text.trim();
   if (!t) {
     return { categories: ['none'], stageSignal: 'discovery', urgencyScore: 0, confidence: 1 };

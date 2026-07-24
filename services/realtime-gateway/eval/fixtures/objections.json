@@ -1,0 +1,186 @@
+{
+  "_comment": "Realistic prospect objection utterances per archetype. Used to measure objection-detection RECALL through the live urgency gate (classifyHeuristic urgencyScore >= URGENCY_THRESHOLD). lang=fr entries deliberately probe the English-only regex weakness (F20). Add real anonymized turns over time.",
+  "items": [
+    {
+      "archetype": "price",
+      "lang": "en",
+      "text": "Honestly it's just too expensive for where we are right now."
+    },
+    { "archetype": "price", "lang": "en", "text": "That's a lot of money to commit to." },
+    { "archetype": "price", "lang": "en", "text": "We can't really afford that this quarter." },
+    { "archetype": "price", "lang": "en", "text": "The price is way over our budget." },
+    {
+      "archetype": "price",
+      "lang": "en",
+      "text": "I'd need to see a serious discount to make this work."
+    },
+    { "archetype": "price", "lang": "en", "text": "Forty grand is steep for a pilot." },
+    {
+      "archetype": "price",
+      "lang": "fr",
+      "text": "C'est beaucoup trop cher pour nous en ce moment."
+    },
+    { "archetype": "price", "lang": "fr", "text": "Le prix dépasse largement notre budget." },
+
+    { "archetype": "stall", "lang": "en", "text": "Let me think about it and get back to you." },
+    { "archetype": "stall", "lang": "en", "text": "I want to sleep on it before deciding." },
+    {
+      "archetype": "stall",
+      "lang": "en",
+      "text": "Can you just send me the info and I'll review it?"
+    },
+    { "archetype": "stall", "lang": "en", "text": "I need to think it over a bit more." },
+    { "archetype": "stall", "lang": "en", "text": "Let's circle back in a few weeks." },
+    { "archetype": "stall", "lang": "en", "text": "I'm not ready to commit today." },
+    {
+      "archetype": "stall",
+      "lang": "fr",
+      "text": "Laissez-moi y réfléchir et je reviens vers vous."
+    },
+    { "archetype": "stall", "lang": "fr", "text": "J'ai besoin d'y penser encore un peu." },
+
+    {
+      "archetype": "authority",
+      "lang": "en",
+      "text": "I need to talk to my partner before I decide."
+    },
+    { "archetype": "authority", "lang": "en", "text": "I'll have to run this by my boss first." },
+    {
+      "archetype": "authority",
+      "lang": "en",
+      "text": "This isn't only my call, I have to check with the team."
+    },
+    { "archetype": "authority", "lang": "en", "text": "Let me speak with my co-founder about it." },
+    { "archetype": "authority", "lang": "en", "text": "My manager owns this budget, not me." },
+    {
+      "archetype": "authority",
+      "lang": "en",
+      "text": "I need sign-off from procurement before we move."
+    },
+    {
+      "archetype": "authority",
+      "lang": "fr",
+      "text": "Je dois en parler à mon associé avant de décider."
+    },
+    { "archetype": "authority", "lang": "fr", "text": "Il faut que je valide avec ma direction." },
+
+    {
+      "archetype": "comparison",
+      "lang": "en",
+      "text": "We want to speak to a couple of other vendors first."
+    },
+    {
+      "archetype": "comparison",
+      "lang": "en",
+      "text": "How do you compare to the other options out there?"
+    },
+    {
+      "archetype": "comparison",
+      "lang": "en",
+      "text": "We're already using a different tool for this."
+    },
+    {
+      "archetype": "comparison",
+      "lang": "en",
+      "text": "I'd like to evaluate some alternatives before committing."
+    },
+    { "archetype": "comparison", "lang": "en", "text": "We have a vendor we've used for years." },
+    {
+      "archetype": "comparison",
+      "lang": "en",
+      "text": "What makes you better than the competitor?"
+    },
+    {
+      "archetype": "comparison",
+      "lang": "fr",
+      "text": "Nous voulons comparer avec d'autres fournisseurs d'abord."
+    },
+    { "archetype": "comparison", "lang": "fr", "text": "On utilise déjà un autre outil pour ça." },
+
+    { "archetype": "time", "lang": "en", "text": "I really don't have time for this right now." },
+    {
+      "archetype": "time",
+      "lang": "en",
+      "text": "We're too busy to take on something new this quarter."
+    },
+    {
+      "archetype": "time",
+      "lang": "en",
+      "text": "There's no bandwidth on my side to implement it."
+    },
+    { "archetype": "time", "lang": "en", "text": "Now isn't a good time, we're slammed." },
+    { "archetype": "time", "lang": "en", "text": "I can't fit another project in right now." },
+    { "archetype": "time", "lang": "fr", "text": "Je n'ai vraiment pas le temps en ce moment." },
+
+    {
+      "archetype": "skepticism",
+      "lang": "en",
+      "text": "We got burned by a tool like this before."
+    },
+    {
+      "archetype": "skepticism",
+      "lang": "en",
+      "text": "I've tried something like this already and it didn't work."
+    },
+    {
+      "archetype": "skepticism",
+      "lang": "en",
+      "text": "I'm skeptical this actually delivers what you're promising."
+    },
+    {
+      "archetype": "skepticism",
+      "lang": "en",
+      "text": "I'm not sure it'll really move the needle for us."
+    },
+    { "archetype": "skepticism", "lang": "en", "text": "Sounds too good to be true, honestly." },
+    {
+      "archetype": "skepticism",
+      "lang": "fr",
+      "text": "On s'est déjà fait avoir par un outil comme ça."
+    },
+
+    {
+      "archetype": "self_doubt",
+      "lang": "en",
+      "text": "I'm not sure my team can actually pull this off."
+    },
+    {
+      "archetype": "self_doubt",
+      "lang": "en",
+      "text": "We're kind of different, I don't think this fits us."
+    },
+    {
+      "archetype": "self_doubt",
+      "lang": "en",
+      "text": "I have too many other responsibilities to drive this."
+    },
+    {
+      "archetype": "self_doubt",
+      "lang": "en",
+      "text": "I worry we won't have the discipline to use it."
+    },
+    { "archetype": "self_doubt", "lang": "en", "text": "I just don't think we can make it work." },
+
+    { "archetype": "resistance", "lang": "en", "text": "You're being a bit pushy here." },
+    { "archetype": "resistance", "lang": "en", "text": "I don't like feeling sold to." },
+    { "archetype": "resistance", "lang": "en", "text": "This feels like a hard sell." },
+    { "archetype": "resistance", "lang": "en", "text": "Slow down, you're pushing too hard." },
+
+    {
+      "archetype": "avoidance",
+      "lang": "en",
+      "text": "Just send me some materials and I'll look later."
+    },
+    { "archetype": "avoidance", "lang": "en", "text": "Can you email me the deck instead?" },
+    {
+      "archetype": "avoidance",
+      "lang": "en",
+      "text": "Let's not get into it now, just send info."
+    },
+    {
+      "archetype": "avoidance",
+      "lang": "en",
+      "text": "I'll review it on my own time, send it over."
+    }
+  ]
+}

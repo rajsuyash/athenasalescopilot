@@ -1,0 +1,63 @@
+{
+  "_comment": "Scripted objection episodes: each step feeds an LLM-shaped `report` into reconcileEpisode and asserts the resulting decision. Simulates a full reframe loop end-to-end (beyond the isolated unit tests) so a change to the state machine that breaks a realistic walkthrough is caught.",
+  "episodes": [
+    {
+      "name": "price objection resolved through the loop",
+      "intentCategories": ["pricing"],
+      "steps": [
+        {
+          "report": { "is_objection": true, "archetype": "price", "step": "disarm" },
+          "expect": { "kind": "open", "step": "disarm" }
+        },
+        {
+          "report": { "is_objection": true, "step": "isolate" },
+          "expect": { "kind": "advance", "step": "isolate" }
+        },
+        {
+          "report": { "is_objection": true, "step": "uncover" },
+          "expect": { "kind": "advance", "step": "uncover" }
+        },
+        {
+          "report": { "is_objection": true, "step": "reframe", "reframe": "opportunity_cost" },
+          "expect": { "kind": "advance", "step": "reframe" }
+        },
+        {
+          "report": { "is_objection": true, "step": "justify" },
+          "expect": { "kind": "advance", "step": "justify" }
+        },
+        {
+          "report": { "is_objection": true, "status": "resolved" },
+          "expect": { "kind": "close", "status": "resolved" }
+        }
+      ]
+    },
+    {
+      "name": "stall objection abandoned when prospect changes subject",
+      "intentCategories": ["objection"],
+      "steps": [
+        {
+          "report": { "is_objection": true, "archetype": "stall", "step": "disarm" },
+          "expect": { "kind": "open", "step": "disarm" }
+        },
+        {
+          "report": { "is_objection": true, "step": "reframe", "deflected": true },
+          "expect": { "kind": "advance", "step": "reframe", "deflections": 1 }
+        },
+        {
+          "report": { "is_objection": false },
+          "expect": { "kind": "close", "status": "abandoned" }
+        }
+      ]
+    },
+    {
+      "name": "objection with null archetype falls back to intent mapping",
+      "intentCategories": ["authority"],
+      "steps": [
+        {
+          "report": { "is_objection": true, "archetype": null, "step": null },
+          "expect": { "kind": "open", "step": "disarm", "archetype": "authority" }
+        }
+      ]
+    }
+  ]
+}
