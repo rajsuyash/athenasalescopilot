@@ -523,6 +523,10 @@ You have two context sources:
    workspace's reframe library and pre-baked objection→answer matrix.
 2. WORKSPACE PLAYBOOK (when present) — methodology and tone the rep
    follows. Treat as a FRAMEWORK and SKILL. DO NOT quote it verbatim.
+3. BUSINESS CONTEXT (when present) — the rep's own offer, buyer, pricing,
+   and differentiators. Tailor every suggestion to it: name their real
+   value and numbers, never a generic pitch. It is background, not a
+   citable chunk.
 
 OBJECTION HANDLING — the core skill. When the prospect turn is an objection
 (price / "too expensive", stall / "think about it", authority / "talk to my
@@ -578,6 +582,82 @@ Hard rules:
 // Loads the published ScriptVersion blocks per workspace + caches in-memory
 // for 60s. The matching `stage_signal` body is appended to the Stage C user
 // prompt so suggestions track the workspace's official playbook.
+
+// ─── Business context block (F21) ──────────────────────────────────────────
+//
+// A compact, per-workspace summary of the offer / ICP / differentiators /
+// pricing built from the workspace BMC, injected into every coach prompt so
+// suggestions are grounded in THIS business instead of generic (the A5 fix).
+// Cost-free: formats existing BMC data, no LLM call. Cached in-memory.
+
+interface BmcContextCache {
+  block: string | null;
+  loadedAt: number;
+}
+const bmcContextCache = new Map<string, BmcContextCache>();
+const BMC_CONTEXT_TTL_MS = 300_000; // 5 min — the BMC rarely changes mid-call.
+
+/** BMC sections worth whispering to the rep, in priority order, each with a
+ *  short label. Skips passion/channel (marketing-facing, not useful live). */
+const BMC_CONTEXT_SECTIONS: ReadonlyArray<readonly [string, string]> = [
+  ['niche', 'Who we sell to'],
+  ['problem', 'Problem we solve'],
+  ['usp', 'Why us'],
+  ['mvp', 'Offer'],
+  ['mechanism', 'How it works'],
+  ['pricing', 'Pricing'],
+  ['delivery', 'Delivery'],
+  ['message', 'Positioning'],
+];
+const BMC_SECTION_CAP = 180; // chars per section
+const BMC_BLOCK_CAP = 1100; // ~300 tokens total
+
+/** Pure: format a workspace BMC data object into a compact context block, or
+ *  null if there's nothing usable. Exported for tests. */
+export function formatBusinessContext(
+  data: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!data) return null;
+  const lines: string[] = [];
+  let total = 0;
+  for (const [key, label] of BMC_CONTEXT_SECTIONS) {
+    const raw = data[key];
+    if (typeof raw !== 'string') continue;
+    const v = raw.replace(/\s+/g, ' ').trim();
+    if (!v) continue;
+    const clipped =
+      v.length > BMC_SECTION_CAP ? `${v.slice(0, BMC_SECTION_CAP - 1).trimEnd()}…` : v;
+    const nextLine = `${label}: ${clipped}`;
+    if (total + nextLine.length > BMC_BLOCK_CAP) break;
+    lines.push(nextLine);
+    total += nextLine.length;
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+/** Load + cache the workspace's business context block. Best-effort — a DB
+ *  hiccup returns the stale block (or null), never throws into the hot path. */
+async function getBusinessContext(workspaceId: string): Promise<string | null> {
+  const cached = bmcContextCache.get(workspaceId);
+  if (cached && Date.now() - cached.loadedAt < BMC_CONTEXT_TTL_MS) return cached.block;
+  let block: string | null = cached?.block ?? null;
+  try {
+    const row = await prisma.workspaceBmc.findUnique({
+      where: { workspaceId },
+      select: { data: true },
+    });
+    block = formatBusinessContext((row?.data ?? null) as Record<string, unknown> | null);
+  } catch {
+    // keep stale on error
+  }
+  bmcContextCache.set(workspaceId, { block, loadedAt: Date.now() });
+  return block;
+}
+
+/** Invalidate one workspace's business-context cache (e.g. on BMC re-publish). */
+export function invalidateBusinessContextCache(workspaceId: string): void {
+  bmcContextCache.delete(workspaceId);
+}
 
 interface ScriptBlock {
   stage: string;
@@ -800,7 +880,10 @@ export async function proactiveCoach(
     });
   };
   const tScript = Date.now();
-  const scriptBody = await getActiveScriptForStage(input.workspaceId, input.stage);
+  const [scriptBody, businessContext] = await Promise.all([
+    getActiveScriptForStage(input.workspaceId, input.stage),
+    getBusinessContext(input.workspaceId),
+  ]);
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
@@ -819,6 +902,9 @@ export async function proactiveCoach(
   const userPrompt = [
     `Trigger: ${input.trigger}`,
     `Current stage: ${input.stage}`,
+    businessContext
+      ? `Business context (the rep's own company — tailor the line to THIS offer, buyer, and pricing):\n${businessContext}`
+      : null,
     input.contextTurns.length
       ? `Recent turns:\n${input.contextTurns
           .slice(-6)
@@ -1173,7 +1259,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   // operations — both are needed for the LLM call but neither depends on
   // the other. Running in parallel saves the script-fetch round-trip
   // (~30-100ms depending on cache state) on every coached turn.
-  const [chunks, scriptBody] = await Promise.all([
+  const [chunks, scriptBody, businessContext] = await Promise.all([
     retrieve(
       input.workspaceId,
       input.customerText,
@@ -1184,6 +1270,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
     deps.llm
       ? getActiveScriptForStage(input.workspaceId, intent.stageSignal)
       : Promise.resolve(null),
+    deps.llm ? getBusinessContext(input.workspaceId) : Promise.resolve(null),
   ]);
   emitLatency({
     workspaceId: input.workspaceId,
@@ -1210,6 +1297,9 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   } else {
     const userPrompt = [
       `Customer turn:\n${input.customerText}`,
+      businessContext
+        ? `Business context (the rep's own company — ground every suggestion in THIS offer, buyer, and pricing; never generic):\n${businessContext}`
+        : null,
       input.contextTurns.length
         ? `Context:\n${input.contextTurns
             .slice(-REACTIVE_CONTEXT_TURNS)
