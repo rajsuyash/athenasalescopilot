@@ -1,0 +1,23 @@
+{
+  "_comment": "Benign / positive / neutral customer turns that must NOT trigger objection coaching. Measures PRECISION — the gap that let F20's false-positive regression ship (recall-only eval stayed green while benign turns fired objection advice). A turn here 'fires' if classifyHeuristic marks it isObjection, i.e. it would bypass the urgency gate into objection-first retrieval. Questions are excluded on purpose (a question legitimately invites a coached answer; the output relevance gate handles those).",
+  "items": [
+    { "text": "But yeah, that sounds really useful." },
+    { "text": "I think this could be great for us." },
+    { "text": "We already have a call scheduled for Friday." },
+    { "text": "Honestly this fits us really well." },
+    { "text": "This could really move the needle for us." },
+    { "text": "We have plenty of bandwidth for this right now." },
+    { "text": "Compared to last year we've grown a lot." },
+    { "text": "Yeah we can commit to a pilot next week." },
+    { "text": "Our team is busy scaling up, it's exciting." },
+    { "text": "We use a different tool for email but not for this." },
+    { "text": "Sure, email me the details and I'll sign off quickly." },
+    { "text": "That makes a lot of sense, thanks for explaining." },
+    { "text": "We're pretty happy with how things are going." },
+    { "text": "Right now we handle this manually with spreadsheets." },
+    { "text": "Our main goal this quarter is faster onboarding." },
+    { "text": "The team is about forty reps across two offices." },
+    { "text": "Okay, that lines up with what we were hoping for." },
+    { "text": "We already got budget approved for tooling this year." }
+  ]
+}

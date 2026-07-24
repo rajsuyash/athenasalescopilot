@@ -10,21 +10,22 @@ Exits non-zero if any **gated** metric drops below its threshold.
 
 ## What it measures
 
-| Metric                           | Source                                                                                  | Gate                |
-| -------------------------------- | --------------------------------------------------------------------------------------- | ------------------- |
-| **Objection-detection recall**   | `classifyHeuristic().urgencyScore >= URGENCY_THRESHOLD` over `fixtures/objections.json` | EN ≥ 40% (baseline) |
-| **Objection-loop state machine** | `reconcileEpisode` walked over `fixtures/episodes.json` end-to-end                      | 100% transitions    |
-| **Retrieval ordering**           | `mergeObjectionFirst` keeps objection chunks first                                      | must hold           |
+| Metric                           | Source                                                             | Gate                |
+| -------------------------------- | ------------------------------------------------------------------ | ------------------- |
+| **Objection recall** (EN / FR)   | `classifyHeuristic().isObjection` over `fixtures/objections.json`  | EN ≥ 85% / FR ≥ 80% |
+| **Precision** (benign quiet)     | benign turns NOT flagged, over `fixtures/benign.json`              | ≥ 95%               |
+| **Objection-loop state machine** | `reconcileEpisode` walked over `fixtures/episodes.json` end-to-end | 100% transitions    |
+| **Retrieval ordering**           | `mergeObjectionFirst` keeps objection chunks first                 | must hold           |
 
-Recall is _"would this objection even reach the LLM?"_ — the urgency gate is the thing that once suppressed **98/98** customer turns in prod. A regex or threshold change that leaks objections shows up here immediately.
+**Recall + precision are both gated.** Recall = real objections reach the coach. Precision = benign turns stay silent. The eval measures both because recall-only is what let the F20 regression ship.
 
-## What F20 fixed (EN recall 45% → ~100%)
+## Why precision exists (the "random advice" incident)
 
-This harness first measured **EN recall at ~45%** — the regex gate missed more than half of realistic objections. Single-signal turns (_"I'll have to run this by my boss"_, _"you're being pushy"_, _"now isn't a good time"_) scored ~0.30 and fell under the 0.35 urgency threshold — the **A4** weakness, quantified.
+F20 lifted recall to ~100% by making objections bypass the urgency gate — but it keyed `isObjection` off loose common words ("but", "think", "already", "commit", "busy"), so **benign turns fired objection advice**. On a real call the coach gave reframes for objections that weren't there — "random advice unrelated to what the customer said." The recall-only eval stayed green throughout.
 
-**F20** fixed it: objections now **bypass the urgency gate** (`classifyHeuristic().isObjection` — the gate exists for cost control on generic chatter, not to filter objections) and the objection patterns were widened using the exact misses this eval printed. EN recall is now **~100%**, so `EN_RECALL_GATE` is raised to **0.90** — it now guards against a real regression rather than characterizing a broken baseline.
+The fix narrowed `isObjection` to **specific objection phrases only** (never a lone word) and added this **precision corpus** as a hard gate. Benign precision went from **39% → 100%** while recall stayed at 100%. Any future pattern that fires on normal speech now trips the gate.
 
-**F20-FR** then added French objection patterns, taking FR recall from ~10% to ~100% — so FR is now gated (0.85) too, not just informational.
+Relevance is enforced in three layers, all biased toward silence: precise trigger (here), a retrieval relevance floor (`RETRIEVAL_MIN_SCORE` 0.2), and an output gate (the LLM returns `type:"none"` when nothing fits).
 
 ## Extending
 
