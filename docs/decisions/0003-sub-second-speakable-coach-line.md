@@ -111,6 +111,78 @@ required `my` immediately before `partner`, so "talk to my **business**
 partner" scored 0.295 against the 0.35 urgency gate and the coach stayed
 silent. Silent failure on a core objection outranks latency.
 
+## Outcome (2026-07-26) — target met, by a different route than decided
+
+The three levers above were all shipped and all measured. Two behaved as
+predicted (punctuation flush, chunk trim); the third was refuted; and the
+target was ultimately met by a mechanism this ADR did not originally contain.
+
+### What the levers actually delivered
+
+| Change                              | Predicted | Measured                                                                                                                                                                                                                                      |
+| ----------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Punctuation-aware flush (800→110ms) | −650 ms   | as predicted                                                                                                                                                                                                                                  |
+| Chunk excerpt cap 700→400 chars     | —         | ~−130 ms; paid for the reframe library                                                                                                                                                                                                        |
+| Retrieval (speculative prefix)      | −411 ms   | **wrong: retrieval is 64-99 ms avg**, the episode cache already served mid-loop turns. Not worth implementing.                                                                                                                                |
+| Prompt caching by crossing 4096     | −250 ms   | **refuted: TTFT got 2.5x WORSE** (760→1903 ms) with the cache confirmed engaged (`cache_read_input_tokens = 4958`). Caching saves prefill compute; the model still attends over the full context. True for cost, false for latency. Reverted. |
+
+### The measurement that changed the design
+
+Built `eval/live-judge.ts` — the `--live` mode `eval/run.ts` had always
+promised — because hand-measured n=3 runs produced means of 1287 ms and 1530 ms
+with no latency-affecting change between them: ~250 ms of run-to-run noise
+swamping the 100-150 ms effects being tuned. Over 16 judged samples:
+
+    TTFT           mean  933 ms   p50  866 ms   p90 1317 ms
+    line complete  mean 1833 ms   p50 1651 ms   p90 2713 ms
+
+**TTFT p90 alone exceeds the entire budget before a word streams.** No amount
+of prompt or retrieval tuning closes that, and no fast-inference provider key
+(Groq / Cerebras) is available to route around it.
+
+### The decision that met the target
+
+The judged output revealed the way through: for a freshly-raised objection the
+LLM was reproducing the library template almost verbatim every time. The
+opening disarm+isolate is determined by the ARCHETYPE, not the conversation —
+which is why a trained rep delivers it reflexively. The same holds for
+uncover / justify / consequence / identity_close, which are determined by WHICH
+STEP the loop is on.
+
+So the model is now spent only where adaptation is real:
+
+| Loop step                              | Served by | Measured (end-to-end, incl. network) |
+| -------------------------------------- | --------- | ------------------------------------ |
+| disarm + isolate (fresh objection)     | template  | **252 ms**                           |
+| uncover                                | template  | **297 ms**                           |
+| **reframe**                            | **LLM**   | ~1950 ms                             |
+| justify / consequence / identity_close | template  | ~250-300 ms                          |
+
+Server-side `instant_opener` is **10-17 ms** for the whole coach path; the rest
+of the client-observed figure is the 110 ms settle beat plus network. Six of the
+seven loop steps are now an order of magnitude inside the budget, and the one
+that is not is the step where landing in the prospect's own words and numbers is
+the entire value.
+
+`deps.instantOpeners = false` forces everything back through the LLM for A/B.
+
+### Guardrails against the obvious regression
+
+This is deliberately not the canned-`askNext` mistake that a 2026-07-24 field
+report killed. Those were context-blind and re-asked answered ground. These fire
+only on a detected objection, are archetype- and step-matched rather than
+generic, ask about the prospect's own goal rather than for new information, run
+through the same dedup and display gate as LLM output, and decline outright
+when the prospect asked a question (they want an answer, and the model can give
+one from the chunks) or when the next step is `reframe`.
+
+`eval:live` now gates any model change on strict-JSON adherence,
+speakable-verbatim rate, and placeholder-leak rate. Its judge had to be taught
+the reframe loop first: an uninformed judge failed two canonical moves as
+"pivots away from price" and "deflects comparison", and used as a gate would
+have driven the coach toward exactly the generic direct rebuttals the product
+exists to avoid.
+
 ## Consequences
 
 **Positive**
