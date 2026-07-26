@@ -3,38 +3,39 @@ import { test } from 'node:test';
 import { SUGGEST_SYSTEM } from './coach-prompt.js';
 
 /**
- * Anthropic's minimum cacheable prefix on Haiku 4.5 is 4096 tokens, and
- * falling below it disables prompt caching SILENTLY — no error, just
- * cache_read_input_tokens = 0. That exact failure went unnoticed from
- * 2026-05-10 to 2026-07-26 because nothing asserted the size.
+ * This guards a LATENCY budget, not a cache floor.
  *
- * Measured with the real count_tokens endpoint (2026-07-26,
- * claude-haiku-4-5): 18,069 chars → 4,965 tokens, i.e. ~3.64 chars/token.
- * The floor below keeps ~1000 tokens of headroom over 4096. Tokens can't be
- * counted offline, so this guards the proxy — if you change the prompt
- * substantially, re-measure rather than just nudging this constant.
+ * Both sides of Haiku 4.5's 4096-token cache floor were measured in prod
+ * (2026-07-26): at 4965 tokens the prefix cached (cache_read_input_tokens =
+ * 4958, confirmed) and llm_ttft still rose from 760ms to 1903ms. Caching saves
+ * prefill compute but the model attends over the whole context either way, and
+ * measured TTFT scales at ~0.32ms per context token regardless of cache state.
+ *
+ * The product constraint is a speakable line within 1s of the prospect
+ * finishing, so TTFT beats token cost and this prompt stays dense and
+ * deliberately UNcached. Padding it back over 4096 to "fix" the missing cache
+ * would re-introduce ~350ms of TTFT — that trade was measured and rejected.
+ *
+ * Measured: 8,852 chars → 2,409 tokens on claude-haiku-4-5 (~3.67 chars/token).
  */
-const CHARS_PER_TOKEN = 3.64;
-const CACHE_FLOOR_TOKENS = 4096;
-const MIN_CHARS = 16_000; // ≈ 4,395 tokens — ~300 tokens above the floor
+const MAX_CHARS = 11_000; // ≈ 3,000 tokens — hard ceiling on prefill cost
+const CHARS_PER_TOKEN = 3.67;
 
-test('SUGGEST_SYSTEM stays above the Haiku 4.5 prompt-cache floor', () => {
+test('SUGGEST_SYSTEM stays within the TTFT budget', () => {
   const estTokens = Math.round(SUGGEST_SYSTEM.length / CHARS_PER_TOKEN);
   assert.ok(
-    SUGGEST_SYSTEM.length >= MIN_CHARS,
-    `prompt is ${SUGGEST_SYSTEM.length} chars (~${estTokens} tokens); needs ≥${MIN_CHARS} ` +
-      `to stay clear of the ${CACHE_FLOOR_TOKENS}-token cache floor. Shortening it ` +
-      `disables prompt caching silently — re-measure with count_tokens before lowering this.`,
+    SUGGEST_SYSTEM.length <= MAX_CHARS,
+    `prompt is ${SUGGEST_SYSTEM.length} chars (~${estTokens} tokens), over the ${MAX_CHARS}-char ` +
+      `budget. Every ~3.7 chars adds ~0.32ms to TTFT on the hot path. Adding content here ` +
+      `directly spends the 1s speakable-line budget — re-measure end-to-end before raising this.`,
   );
 });
 
-// The prefix must be byte-identical on every call or the cache never hits.
-// A template interpolation would make it per-turn and silently break caching.
+// The prefix must be byte-identical across calls. Even uncached, an
+// interpolated value here would be a per-turn prompt, which breaks the ability
+// to ever turn caching back on and makes A/B comparisons meaningless.
 test('SUGGEST_SYSTEM is a static prefix — no interpolation left behind', () => {
   assert.ok(!SUGGEST_SYSTEM.includes('${'), 'prompt must not interpolate anything');
-  // Two calls must yield the identical string (catches accidental Date/random use
-  // if this ever becomes a builder function).
-  assert.equal(SUGGEST_SYSTEM, SUGGEST_SYSTEM);
 });
 
 // Rule A is the product: the rep must be able to say the line verbatim.
@@ -45,26 +46,40 @@ test('SUGGEST_SYSTEM carries the verbatim-output and silence rules', () => {
   assert.match(SUGGEST_SYSTEM, /≤30 words/);
 });
 
-// All nine archetypes must be present — the whole point of shipping the full
-// library rather than the active archetype is that the prefix stays stable.
-test('SUGGEST_SYSTEM carries all nine objection archetypes', () => {
+/**
+ * All nine archetypes must carry a canonical template. This is what a live
+ * comparison showed produces a line the rep can read out loud verbatim rather
+ * than a paraphrase of a technique — dropping any archetype silently falls back
+ * to the model inventing phrasing for that objection type.
+ */
+test('SUGGEST_SYSTEM carries a reframe line for all nine archetypes', () => {
   for (const a of [
-    'PRICE',
-    'STALL',
-    'AUTHORITY',
-    'COMPARISON',
-    'TIME',
-    'SKEPTICISM',
-    'SELF-DOUBT',
-    'RESISTANCE',
-    'AVOIDANCE',
+    'price',
+    'stall',
+    'authority',
+    'comparison',
+    'time',
+    'skepticism',
+    'self_doubt',
+    'resistance',
+    'avoidance',
   ]) {
-    assert.ok(SUGGEST_SYSTEM.includes(a), `missing archetype section: ${a}`);
+    assert.ok(
+      new RegExp(`^· ${a} `, 'm').test(SUGGEST_SYSTEM),
+      `missing reframe line for archetype: ${a}`,
+    );
   }
 });
 
-// The templates use {slot} placeholders; the model must be told never to emit
-// them. A leaked "{goal}" on a live call is unreadable to the rep.
+// The templates use {slot} placeholders; a leaked "{goal}" is unreadable to a
+// rep mid-call, so the instruction not to emit them must survive edits.
 test('SUGGEST_SYSTEM forbids emitting placeholder tokens', () => {
   assert.match(SUGGEST_SYSTEM, /Never output a brace, bracket, or placeholder token/);
+});
+
+// Two archetypes carry a do-not-run caveat that materially protects the rep on
+// enterprise calls. These are easy to lose when condensing.
+test('SUGGEST_SYSTEM keeps the register-risk caveats', () => {
+  assert.match(SUGGEST_SYSTEM, /HIGH RISK on senior\/enterprise buyers/);
+  assert.match(SUGGEST_SYSTEM, /genuine co-decider with veto power/);
 });

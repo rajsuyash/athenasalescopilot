@@ -346,6 +346,17 @@ const OBJECTION_CATEGORY_PREFIX = 'objection-handling-';
  *  prompt (chunks are ~500 tokens). */
 const RETRIEVAL_TOP_K = 5;
 
+/** Per-chunk character cap in the prompt. Trimmed 700 → 400: at TOP_K 5 that
+ *  is ~1500 fewer prompt chars (~410 tokens), and measured TTFT scales at
+ *  ~0.32ms per context token, so it buys ~130ms on the speakable-line budget.
+ *
+ *  Cutting the chunk COUNT is what caused the documented objection regression
+ *  (topK 3 starved turns of the reframe-library and matrix chunks), so count
+ *  stays at 5 — only the per-chunk excerpt shrinks. 400 chars still carries a
+ *  full reframe entry or FAQ answer; the seeded objection-handling chunks are
+ *  short by construction. */
+const CHUNK_CHAR_CAP = 400;
+
 /** How many prior turns the reactive prompt carries. The model needs enough
  *  history to locate itself in the objection loop AND to see answers the
  *  prospect already gave — at 6 turns, an answer from earlier in the call
@@ -1436,7 +1447,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       `Approved chunks (use the UUID after "CHUNK_ID:" in source_chunk_ids — never the bracket number):\n\n${chunks
         .map(
           (c, i) =>
-            `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text.length > 700 ? `${c.text.slice(0, 700)}…` : c.text}`,
+            `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text.length > CHUNK_CHAR_CAP ? `${c.text.slice(0, CHUNK_CHAR_CAP)}…` : c.text}`,
         )
         .join('\n\n')}`,
     ]
