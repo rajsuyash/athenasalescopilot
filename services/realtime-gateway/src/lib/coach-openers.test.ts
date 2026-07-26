@@ -4,6 +4,8 @@ import {
   detectOpenerArchetype,
   extractGoalPhrase,
   instantOpener,
+  instantStep,
+  nextLoopStep,
   type OpenerArchetype,
 } from './coach-openers.js';
 
@@ -138,5 +140,54 @@ test('instantOpener: holds the word budget across every goal-phrase length', () 
       assert.match(o.line, /[.?!]$/);
       assert.ok(!/[{}<>[\]]/.test(o.line), `placeholder leaked: ${o.line}`);
     }
+  }
+});
+
+// ─── mid-loop canonical steps ───────────────────────────────────────────────
+
+test('instantStep: advances the ladder with a canonical line', () => {
+  assert.deepEqual(instantStep('isolate', 'Yeah I suppose it would help.'), {
+    step: 'uncover',
+    line: "So what's the real thing you'd want to think through before this is a yes?",
+  });
+  assert.equal(instantStep('reframe', 'I guess that makes sense.')?.step, 'justify');
+  assert.equal(instantStep('justify', 'Because we never budgeted for it.')?.step, 'consequence');
+  assert.equal(
+    instantStep('consequence', 'Another two hires we cannot afford.')?.step,
+    'identity_close',
+  );
+});
+
+// The reframe is the one step that must adapt to the prospect's own words and
+// numbers, so it stays on the model rather than getting a template.
+test('instantStep: declines the reframe step — it needs the model', () => {
+  assert.equal(instantStep('uncover', "I'm not sure we'd stick with it."), null);
+});
+
+// A question means they want an answer; marching on with the next Socratic step
+// would talk straight past them.
+test('instantStep: declines when the prospect asked a question', () => {
+  assert.equal(instantStep('isolate', 'How does the Salesforce integration work?'), null);
+  assert.equal(instantStep('justify', 'What does onboarding actually involve?'), null);
+});
+
+test('instantStep: declines at the end of the loop', () => {
+  assert.equal(instantStep('identity_close', 'I see what you mean.'), null);
+});
+
+test('nextLoopStep: walks the ladder and terminates', () => {
+  assert.equal(nextLoopStep('disarm'), 'isolate');
+  assert.equal(nextLoopStep('isolate'), 'uncover');
+  assert.equal(nextLoopStep('uncover'), 'reframe');
+  assert.equal(nextLoopStep('identity_close'), null);
+});
+
+test('instantStep: every canonical step line is complete and within budget', () => {
+  for (const from of ['isolate', 'reframe', 'justify', 'consequence'] as const) {
+    const s = instantStep(from, 'Okay.');
+    assert.ok(s, `no step from ${from}`);
+    assert.match(s.line, /[.?!]$/);
+    assert.ok(s.line.split(/\s+/).filter(Boolean).length <= 18, s.line);
+    assert.ok(!/[{}<>[\]]/.test(s.line), `placeholder leaked: ${s.line}`);
   }
 });

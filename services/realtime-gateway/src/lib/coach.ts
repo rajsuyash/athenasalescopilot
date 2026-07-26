@@ -7,7 +7,12 @@ import { z } from 'zod';
 import { prisma } from '@athena/db';
 import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import type { LlmClient } from '@athena/sdk-llm';
-import { instantOpener } from './coach-openers.js';
+import {
+  instantOpener,
+  instantStep,
+  type LoopStep as OpenerLoopStep,
+  type OpenerArchetype,
+} from './coach-openers.js';
 import { SUGGEST_SYSTEM } from './coach-prompt.js';
 import { emitLatency } from './latency.js';
 
@@ -1372,10 +1377,32 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   // where adapting to the prospect's actual words is the whole value — and
   // where ~1.5s is acceptable because the rep is mid-exchange rather than
   // waiting at a turn boundary.
-  if (intent.isObjection && !input.openEpisode && deps.instantOpeners !== false) {
+  if (deps.instantOpeners !== false) {
     const businessContext = await getBusinessContext(input.workspaceId);
-    const opener = instantOpener(input.customerText, businessContext);
-    if (opener) {
+    // Fresh objection → canonical opener. Mid-episode → the next canonical
+    // loop step, unless that step is `reframe` (needs the model) or the
+    // prospect asked a question (they want an answer, not the next Socratic
+    // move). Either way this is one template lookup, no LLM, no retrieval.
+    const instant: { line: string; archetype: OpenerArchetype; step: OpenerLoopStep } | null =
+      !input.openEpisode
+        ? (() => {
+            const o = instantOpener(input.customerText, businessContext);
+            return o
+              ? { line: o.line, archetype: o.archetype, step: 'isolate' as OpenerLoopStep }
+              : null;
+          })()
+        : (() => {
+            const s = instantStep(input.openEpisode.currentStep, input.customerText);
+            return s
+              ? {
+                  line: s.line,
+                  archetype: input.openEpisode.archetype as OpenerArchetype,
+                  step: s.step,
+                }
+              : null;
+          })();
+    if (instant) {
+      const opener = instant;
       const out: CoachOutput = {
         type: 'coach',
         answerText: null,
@@ -1389,7 +1416,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
         // grounding invariant (PRD F5) is satisfied by construction.
         sourceChunkIds: [],
         policyVersion: POLICY_VERSION,
-        rationale: `instant opener: ${opener.archetype} disarm+isolate (no LLM)`,
+        rationale: `instant ${opener.step}: ${opener.archetype} (no LLM)`,
         display: true,
         intent: { ...intent, source: 'heuristic' },
         sources: [],
@@ -1414,9 +1441,16 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       // LLM instead of re-firing an opener.
       try {
         out.openEpisode = await applyEpisodeDecision(
-          { kind: 'open', archetype: opener.archetype, step: 'isolate', reframe: null },
+          input.openEpisode
+            ? {
+                kind: 'advance',
+                step: opener.step,
+                reframe: input.openEpisode.reframeUsed,
+                deflections: input.openEpisode.deflections,
+              }
+            : { kind: 'open', archetype: opener.archetype, step: opener.step, reframe: null },
           input,
-          null,
+          input.openEpisode ?? null,
         );
       } catch {
         out.openEpisode = null;

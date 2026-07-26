@@ -303,3 +303,74 @@ export function instantOpener(
   }
   return { archetype, line: t.noGoal };
 }
+
+// ─── Mid-loop canonical steps ──────────────────────────────────────────────
+//
+// The same argument that makes the opener model-free extends to most of the
+// rest of the loop: the wording of uncover / justify / consequence /
+// identity_close is determined by WHICH STEP you are on, not by what the
+// prospect just said. "And why do you think that is?" is the justify step
+// whatever they justified. A trained rep does not deliberate over these either.
+//
+// REFRAME is the exception and deliberately stays on the LLM: it has to land in
+// the prospect's own words and numbers, which is precisely the adaptation a
+// template cannot do. So the model is spent on the one step that needs it.
+
+/** Steps that have a canonical line. `reframe` is absent on purpose. */
+const STEP_LINES: Partial<Record<LoopStep, string>> = {
+  uncover: `So what's the real thing you'd want to think through before this is a yes?`,
+  justify: `And why do you think that is?`,
+  consequence: `So if nothing changes for the next two quarters, what does that cost you?`,
+  identity_close: `So what decision do you feel you need to make to not be in that spot?`,
+};
+
+/** Loop steps, in the order a turn advances through them. */
+export type LoopStep =
+  | 'disarm'
+  | 'isolate'
+  | 'uncover'
+  | 'reframe'
+  | 'justify'
+  | 'consequence'
+  | 'identity_close';
+
+const LADDER: readonly LoopStep[] = [
+  'disarm',
+  'isolate',
+  'uncover',
+  'reframe',
+  'justify',
+  'consequence',
+  'identity_close',
+];
+
+/** The step after `current`, or null at the end of the loop. */
+export function nextLoopStep(current: LoopStep): LoopStep | null {
+  const i = LADDER.indexOf(current);
+  if (i < 0 || i === LADDER.length - 1) return null;
+  return LADDER[i + 1] ?? null;
+}
+
+export interface InstantStep {
+  step: LoopStep;
+  line: string;
+}
+
+/**
+ * The canonical line for the next step of an open objection episode, or null
+ * when that step needs the model (reframe), the loop is finished, or the
+ * prospect's turn suggests the ladder no longer applies.
+ *
+ * `customerText` is checked for a question: if the prospect asked something
+ * outright, they want an answer, and marching on with the next Socratic step
+ * would talk past them. Those turns go to the LLM, which can actually answer
+ * from the chunks.
+ */
+export function instantStep(currentStep: LoopStep, customerText: string): InstantStep | null {
+  if (customerText.includes('?')) return null;
+  const step = nextLoopStep(currentStep);
+  if (!step) return null;
+  const line = STEP_LINES[step];
+  if (!line) return null; // reframe — needs the model
+  return { step, line };
+}
