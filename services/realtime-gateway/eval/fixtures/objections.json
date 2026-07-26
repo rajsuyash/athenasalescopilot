@@ -48,6 +48,22 @@
     {
       "archetype": "authority",
       "lang": "en",
+      "comment": "Prod 2026-07-26: qualifier between possessive and role. The old pattern required 'my' immediately before 'partner', so this scored 0.295 vs the 0.35 urgency gate and the coach stayed SILENT on a textbook authority objection.",
+      "text": "I'd really need to talk to my business partner before I could commit to anything like this today."
+    },
+    {
+      "archetype": "authority",
+      "lang": "en",
+      "text": "Let me run it by our finance team before we go further."
+    },
+    {
+      "archetype": "authority",
+      "lang": "en",
+      "text": "I want to loop in my technical co-founder on this."
+    },
+    {
+      "archetype": "authority",
+      "lang": "en",
       "text": "This isn't only my call, I have to check with the team."
     },
     { "archetype": "authority", "lang": "en", "text": "Let me speak with my co-founder about it." },

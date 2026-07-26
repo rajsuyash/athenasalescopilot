@@ -140,8 +140,18 @@ const KEYWORDS: Record<Exclude<IntentCategory, 'none'>, RegExp[]> = {
     /\bcircle back\b/i,
     /\bnot ready to (?:commit|decide|move|buy|sign|go)\b/i,
     /\bbefore (?:i |we )?committ?ing\b/i,
+    // "before I could commit", "before we can sign" — the -ing form above
+    // misses the modal construction, which is at least as common in speech.
+    /\bbefore (?:i|we) (?:can|could|would|really) (?:commit|sign|decide|move)\b/i,
     // Authority — deferring the decision to someone else.
-    /\b(?:talk|speak|check|run) (?:this |it )?(?:to|with|by) (?:my |the |our )?(?:wife|husband|partner|spouse|boss|manager|team|cofounder|co-founder|leadership|procurement)\b/i,
+    // The possessive and the role can be separated by qualifiers: "talk to my
+    // BUSINESS partner", "run it by our FINANCE team", "check with my
+    // TECHNICAL co-founder". Requiring `my` immediately before the role made
+    // "talk to my business partner" — a textbook authority objection — score
+    // 0.295 against the 0.35 urgency gate, so the coach stayed SILENT
+    // (measured in prod 2026-07-26). Allow up to two intervening words;
+    // bounded (not `[^.]*`) so it can't span unrelated clauses.
+    /\b(?:talk|speak|check|run|loop) (?:this |it |them )?(?:to|with|by|in) (?:my |the |our |her |his |their )?(?:\w+ ){0,2}(?:wife|husband|partner|spouse|boss|manager|team|cofounder|co-founder|leadership|procurement|board|committee)\b/i,
     /\b(?:not|n'?t)(?: only)? my (?:call|decision)\b/i,
     /\b(?:need|get|require)[^.]*\bsign[- ]?off\b/i,
     /\bowns? (?:this|the) budget\b/i,

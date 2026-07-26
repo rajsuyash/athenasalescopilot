@@ -124,6 +124,28 @@ export function joinCustomerFragments(parts: readonly string[]): string {
     .trim();
 }
 
+/**
+ * Does the buffered text look like a FINISHED sentence?
+ *
+ * Deepgram runs with `smart_format=true`, so a completed utterance carries
+ * terminal punctuation while mid-utterance fragments generally do not. When we
+ * can see the sentence ended, waiting out the full quiet window is pure dead
+ * time — this is the difference between a ~800ms and a ~150ms turn boundary,
+ * the single largest controllable slice of the speakable-line budget (ADR 0003).
+ *
+ * Deliberately does NOT special-case abbreviations ("Inc.", "e.g."). They are
+ * rare in speech, and the caller still waits a short settle delay rather than
+ * flushing instantly, so a mid-sentence period costs one extra 150ms beat and
+ * a possible split — the same outcome as before coalescing existed, not worse.
+ */
+export function isLikelyUtteranceEnd(text: string, minWords: number): boolean {
+  const t = text.trim();
+  // Allow a closing quote/bracket after the punctuation: `right now."`
+  if (!/[.!?]["')\]]?$/.test(t)) return false;
+  // A stray "Yeah." shouldn't end a turn the prospect is still forming.
+  return t.split(/\s+/).filter(Boolean).length >= minWords;
+}
+
 export class SpeakerMap {
   private repLabel: string | null;
   private forceCustomer: boolean;
@@ -291,6 +313,13 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     // p50=0ms gaps the quiet timer keeps resetting while someone talks
     // continuously, which would otherwise defer coaching indefinitely.
     const COALESCE_MAX_WAIT_MS = Number(process.env.COACH_COALESCE_MAX_MS ?? 5_000);
+    // When the buffer already reads as a finished sentence we don't need the
+    // full quiet window — just a short beat in case a trailing fragment is
+    // still in flight. This is the -650ms lever in ADR 0003.
+    const SENTENCE_SETTLE_MS = Number(process.env.COACH_SETTLE_MS ?? 150);
+    // Below this, terminal punctuation is more likely a filler ("Yeah.",
+    // "Right.") than the end of a thought worth coaching on.
+    const MIN_WORDS_FOR_EARLY_FLUSH = 4;
 
     let coalesceParts: string[] = [];
     let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -684,9 +713,17 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       if (coalesceTimer) clearTimeout(coalesceTimer);
       if (Date.now() - coalesceStartedAt >= COALESCE_MAX_WAIT_MS) {
         flushCoalescedTurn();
-      } else {
-        coalesceTimer = setTimeout(flushCoalescedTurn, COALESCE_WINDOW_MS);
+        return;
       }
+      // Punctuated, substantial buffer → the thought is finished; take the
+      // short settle beat instead of the full quiet window.
+      const wait = isLikelyUtteranceEnd(
+        joinCustomerFragments(coalesceParts),
+        MIN_WORDS_FOR_EARLY_FLUSH,
+      )
+        ? SENTENCE_SETTLE_MS
+        : COALESCE_WINDOW_MS;
+      coalesceTimer = setTimeout(flushCoalescedTurn, wait);
     };
 
     socket.on('message', (data: Buffer, isBinary: boolean) => {
