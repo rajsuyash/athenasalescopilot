@@ -34,11 +34,7 @@ export interface RecapPayload {
   lowSignal: boolean;
 }
 
-export async function endMeeting(
-  apiUrl: string,
-  token: string,
-  meetingId: string,
-): Promise<void> {
+export async function endMeeting(apiUrl: string, token: string, meetingId: string): Promise<void> {
   const res = await fetch(`${apiUrl}/v1/meetings/${encodeURIComponent(meetingId)}/end`, {
     method: 'POST',
     headers: {

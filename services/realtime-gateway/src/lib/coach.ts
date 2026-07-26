@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { prisma } from '@athena/db';
 import type { EmbeddingClient } from '@athena/sdk-embeddings';
 import type { LlmClient } from '@athena/sdk-llm';
+import { instantOpener } from './coach-openers.js';
 import { SUGGEST_SYSTEM } from './coach-prompt.js';
 import { emitLatency } from './latency.js';
 
@@ -1185,6 +1186,8 @@ export interface CoachOutput {
 
 export interface CoachDeps {
   llm: LlmClient | null;
+  /** Set false to force every objection through the LLM (A/B and eval use). */
+  instantOpeners?: boolean;
   embeddings: EmbeddingClient;
   minDisplayConfidence: number;
   urgencyThreshold: number;
@@ -1351,6 +1354,111 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       ...suppressed(intent, 'urgency below threshold'),
       openEpisode: input.openEpisode ?? null,
     };
+  }
+
+  // ─── Instant canonical opener: the sub-second path ──────────────────────
+  //
+  // A freshly-raised objection gets its canonical disarm+isolate line with NO
+  // model call and NO retrieval. Measured against Haiku 4.5 (n=16, judged), the
+  // LLM path cannot meet the 1s speakable-line constraint — TTFT alone is
+  // mean 933ms / p90 1317ms, before a single word streams. But for this
+  // specific move the LLM was reliably reproducing the library template almost
+  // verbatim anyway, because the opening move is determined by the ARCHETYPE
+  // rather than by the conversation. So we emit the template directly:
+  // ~110ms settle + ~1ms here, instead of ~1.8s.
+  //
+  // Strictly the OPENING move only. Once an episode is open, the loop's
+  // uncover / reframe / justify / consequence / close steps go to the LLM,
+  // where adapting to the prospect's actual words is the whole value — and
+  // where ~1.5s is acceptable because the rep is mid-exchange rather than
+  // waiting at a turn boundary.
+  if (intent.isObjection && !input.openEpisode && deps.instantOpeners !== false) {
+    const businessContext = await getBusinessContext(input.workspaceId);
+    const opener = instantOpener(input.customerText, businessContext);
+    if (opener) {
+      const out: CoachOutput = {
+        type: 'coach',
+        answerText: null,
+        followupText: opener.line,
+        // Not model-scored, so score it on what we actually know: a
+        // high-precision archetype match on a freshly-raised objection.
+        confidenceScore: 0.8,
+        priorityScore: clamp01(intent.urgencyScore * 0.5 + 0.4),
+        // No chunk is cited because none was retrieved. The opener states no
+        // product fact — it asks about the prospect's own goal — so the
+        // grounding invariant (PRD F5) is satisfied by construction.
+        sourceChunkIds: [],
+        policyVersion: POLICY_VERSION,
+        rationale: `instant opener: ${opener.archetype} disarm+isolate (no LLM)`,
+        display: true,
+        intent: { ...intent, source: 'heuristic' },
+        sources: [],
+        suggestionId: null,
+        newFacts: [],
+        openEpisode: null, // set below
+      };
+
+      // Same dedup the LLM path gets — an opener must not repeat a line the
+      // rep already said or was already shown.
+      const dup = isDuplicateOrSpoken(
+        opener.line,
+        input.recentSuggestions ?? [],
+        input.contextTurns,
+      );
+      if (dup) {
+        out.display = false;
+        out.rationale = `${out.rationale} (duplicate suppressed)`;
+      }
+
+      // Open the episode at isolate so the NEXT turn continues the loop on the
+      // LLM instead of re-firing an opener.
+      try {
+        out.openEpisode = await applyEpisodeDecision(
+          { kind: 'open', archetype: opener.archetype, step: 'isolate', reframe: null },
+          input,
+          null,
+        );
+      } catch {
+        out.openEpisode = null;
+      }
+
+      if (input.turnReady) await input.turnReady;
+      try {
+        const row = await prisma.suggestion.create({
+          data: {
+            workspaceId: input.workspaceId,
+            meetingId: input.meetingId,
+            turnId: input.turnId,
+            suggestionType: out.type,
+            answerText: null,
+            followupText: out.followupText,
+            confidenceScore: out.confidenceScore,
+            priorityScore: out.priorityScore,
+            sourceChunkIds: [],
+            policyVersion: out.policyVersion,
+            rationale: out.rationale,
+          },
+        });
+        out.suggestionId = row.id;
+      } catch (err) {
+        // Persistence is for analytics; never fail the rep's line over it.
+        void err;
+      }
+
+      emitLatency({
+        workspaceId: input.workspaceId,
+        meetingId: input.meetingId,
+        stage: 'instant_opener',
+        latencyMs: Date.now() - tStart,
+      });
+      emitLatency({
+        workspaceId: input.workspaceId,
+        meetingId: input.meetingId,
+        stage: 'coach_total',
+        latencyMs: Date.now() - tStart,
+      });
+      return out;
+    }
   }
 
   const cat = intent.categories.find((c) => c !== 'none') ?? null;

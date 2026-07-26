@@ -12,7 +12,8 @@
     "start": "node dist/server.js",
     "test": "node --test --import tsx 'src/**/*.test.ts'",
     "eval": "tsx eval/run.ts",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "eval:live": "tsx eval/live-judge.ts"
   },
   "dependencies": {
     "@athena/auth": "workspace:*",

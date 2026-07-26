@@ -13,6 +13,8 @@ export type LatencyStage =
   | 'retrieval'
   | 'script_fetch'
   | 'llm_ttft'
+  /** Canonical opener emitted with no model call — the sub-second path. */
+  | 'instant_opener'
   /**
    * Wall-clock from the customer's final transcript segment arriving to the
    * rep seeing the first token. The ONLY stage that measures what the rep

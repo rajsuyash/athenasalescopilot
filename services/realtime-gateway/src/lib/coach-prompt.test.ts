@@ -43,7 +43,7 @@ test('SUGGEST_SYSTEM carries the verbatim-output and silence rules', () => {
   assert.match(SUGGEST_SYSTEM, /SPEAK THE EXACT WORDS/);
   assert.match(SUGGEST_SYSTEM, /SILENCE OVER NOISE/);
   assert.match(SUGGEST_SYSTEM, /NEVER RE-ASK ANSWERED GROUND/);
-  assert.match(SUGGEST_SYSTEM, /≤22 words/);
+  assert.match(SUGGEST_SYSTEM, /≤18 words/);
 });
 
 /**
