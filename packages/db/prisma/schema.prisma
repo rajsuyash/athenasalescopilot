@@ -580,9 +580,16 @@ model LatencyEvent {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   workspaceId String   @map("workspace_id") @db.Uuid
   meetingId   String?  @map("meeting_id") @db.Uuid
-  stage       String // "transcript_final" | "intent" | "retrieval" | "suggestion" | "coach_total"
+  stage       String // "transcript_final" | "intent" | "retrieval" | "script_fetch" | "llm_ttft" | "turn_to_first_token" | "suggestion" | "coach_total"
   latencyMs   Int      @map("latency_ms")
   degraded    Boolean  @default(false)
+  /// Model that served this event. Without it a latency number can't be
+  /// attributed — the May-July 2026 baseline spans at least one hot-path
+  /// model change and is therefore uninterpretable after the fact.
+  model       String?
+  /// Anthropic cache_read_input_tokens. >0 proves prompt caching engaged
+  /// (PRD v2 F19 AC4). Null when the provider didn't report it.
+  cacheReadTokens Int?  @map("cache_read_tokens")
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([workspaceId, stage, createdAt])

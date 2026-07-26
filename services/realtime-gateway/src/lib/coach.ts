@@ -1210,6 +1210,11 @@ export interface CoachInput {
    *  handler from prior turns' `newFacts`). Pinned into the prompt so the
    *  coach never re-asks answered ground — even reworded. */
   establishedFacts?: string[];
+  /** Wall-clock (ms) when the customer's final segment reached the gateway.
+   *  Set by the handler BEFORE the call is queued, so `turn_to_first_token`
+   *  includes any time spent waiting behind an in-flight coach call — the
+   *  one thing every in-function stage timer structurally cannot see. */
+  turnEndAt?: number;
 }
 
 export interface CoachOutput {
@@ -1455,6 +1460,10 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   let ttftEmitted = false;
   let out: CoachOutput;
   let episodeReport: EpisodeReportT | undefined;
+  // Captured from the LLM result so the terminal `suggestion` event can be
+  // attributed to a model and report cache effectiveness.
+  let servedModel: string | undefined;
+  let cacheReadTokens: number | undefined;
   if (!deps.llm) {
     out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence);
   } else {
@@ -1521,18 +1530,32 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
             onPartialText: (d: string, a: string) => {
               if (!ttftEmitted) {
                 ttftEmitted = true;
+                const now = Date.now();
                 emitLatency({
                   workspaceId: input.workspaceId,
                   meetingId: input.meetingId,
                   stage: 'llm_ttft',
-                  latencyMs: Date.now() - tSuggest,
+                  latencyMs: now - tSuggest,
                 });
+                // What the rep actually feels: prospect stopped talking →
+                // first word on screen. Spans queue wait + retrieval + TTFT.
+                if (input.turnEndAt !== undefined) {
+                  emitLatency({
+                    workspaceId: input.workspaceId,
+                    meetingId: input.meetingId,
+                    stage: 'turn_to_first_token',
+                    latencyMs: now - input.turnEndAt,
+                  });
+                }
               }
               input.onPartialText?.(d, a);
             },
           }
         : {}),
     });
+
+    servedModel = r.model;
+    cacheReadTokens = r.usage?.cacheReadTokens;
 
     if (r.finishReason === 'cancelled' && input.abortSignal?.aborted) {
       // Superseded by a newer customer turn — say nothing; the fresh call
@@ -1636,12 +1659,15 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
     meetingId: input.meetingId,
     stage: 'suggestion',
     latencyMs: Date.now() - tSuggest,
+    ...(servedModel !== undefined ? { model: servedModel } : {}),
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
   });
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
     stage: 'coach_total',
     latencyMs: Date.now() - tStart,
+    ...(servedModel !== undefined ? { model: servedModel } : {}),
   });
 
   return out;

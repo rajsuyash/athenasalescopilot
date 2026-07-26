@@ -216,7 +216,14 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     // made replies feel 3-4s late: the answer to the full thought waited for
     // the partial-fragment call to finish).
     let coachAbort: AbortController | null = null;
-    let pending: { customerText: string; turnId: string; turnReady: Promise<void> } | null = null;
+    let pending: {
+      customerText: string;
+      turnId: string;
+      turnReady: Promise<void>;
+      /** Stamped when the final segment landed, BEFORE queueing — so
+       *  `turn_to_first_token` counts any wait behind an in-flight call. */
+      turnEndAt: number;
+    } | null = null;
     // log is rebound after auth-frame completes so workspaceId is logged.
     let log = req.log.child(
       claims ? { sessionId, workspaceId: claims.workspaceId } : { sessionId },
@@ -311,7 +318,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
     const drainPending = async (): Promise<void> => {
       if (inflightCoach || !pending || !meetingId || !claims) return;
-      const { customerText, turnId, turnReady } = pending;
+      const { customerText, turnId, turnReady, turnEndAt } = pending;
       pending = null;
       inflightCoach = true;
       coachAbort = new AbortController();
@@ -335,6 +342,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             recentSuggestions: recentSuggestions.slice(0, 8),
             establishedFacts,
             turnReady,
+            turnEndAt,
             abortSignal: coachAbort.signal,
             onPartialText: (_delta, accumulated) => {
               // Anthropic streams raw JSON tokens. We extract just the
@@ -575,7 +583,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         .catch((err) => {
           log.warn({ err }, 'turn persist failed');
         });
-      pending = { customerText: seg.text, turnId, turnReady };
+      pending = { customerText: seg.text, turnId, turnReady, turnEndAt: lastCustomerFinalAt };
       // A newer complete thought supersedes the stale in-flight call.
       if (inflightCoach && coachAbort) coachAbort.abort();
       void drainPending();

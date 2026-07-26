@@ -13,6 +13,16 @@ export type LatencyStage =
   | 'retrieval'
   | 'script_fetch'
   | 'llm_ttft'
+  /**
+   * Wall-clock from the customer's final transcript segment arriving to the
+   * rep seeing the first token. The ONLY stage that measures what the rep
+   * actually experiences: it spans queue wait (a coach call blocked behind an
+   * in-flight one), intent, retrieval, AND model TTFT.
+   *
+   * Every other stage starts inside coachAndPersist, so none of them could
+   * see the pre-call queue stall that motivated this metric.
+   */
+  | 'turn_to_first_token'
   | 'suggestion'
   | 'coach_total';
 
@@ -22,12 +32,18 @@ interface PendingEvent {
   stage: LatencyStage;
   latencyMs: number;
   degraded?: boolean;
+  /** Model that served the call, so the number is attributable later. */
+  model?: string | null;
+  /** Anthropic cache_read_input_tokens — >0 proves the prompt cache engaged. */
+  cacheReadTokens?: number | null;
 }
 
 const FLUSH_INTERVAL_MS = 5_000;
 const MAX_BATCH = 200;
 let buffer: PendingEvent[] = [];
 let timer: NodeJS.Timeout | null = null;
+/** Latch so a persistent write failure warns once, not once per flush. */
+let warnedFlushFailure = false;
 
 function ensureTimer(): void {
   if (timer) return;
@@ -57,10 +73,25 @@ export async function flushNow(): Promise<void> {
         stage: e.stage,
         latencyMs: Math.round(e.latencyMs),
         degraded: e.degraded ?? false,
+        model: e.model ?? null,
+        cacheReadTokens: e.cacheReadTokens ?? null,
       })),
     });
-  } catch {
+  } catch (err) {
     // Drop on failure — telemetry must never block the hot path.
+    //
+    // But do NOT drop silently. This catch hid a total telemetry outage:
+    // `latency_events` writes were failing and nobody knew, so months of
+    // "check the dashboard" follow-ups were chasing a table with no data.
+    // One warn per flush is cheap and makes the next outage visible.
+    if (!warnedFlushFailure) {
+      warnedFlushFailure = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[latency] flush failed — telemetry is being dropped (logged once per process):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 }
 
