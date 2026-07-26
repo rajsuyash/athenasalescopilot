@@ -33,7 +33,19 @@ export interface LlmCompleteResult<T = unknown> {
   parsed?: T;
   model: string;
   finishReason: 'stop' | 'length' | 'error' | 'cancelled';
-  usage?: { inputTokens?: number; outputTokens?: number };
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    /**
+     * Prompt-cache hit size. Non-zero means the provider served a cached
+     * prefill — the signal that `cache_control` is actually working.
+     * Previously unread, which made cache effectiveness unmeasurable and
+     * left PRD v2 F19 AC4 (`cache_read_input_tokens > 0`) unverifiable.
+     */
+    cacheReadTokens?: number;
+    /** Tokens written INTO the cache on this call (first call of a window). */
+    cacheCreationTokens?: number;
+  };
   latencyMs: number;
 }
 

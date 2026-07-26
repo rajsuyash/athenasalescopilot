@@ -3,12 +3,32 @@ import type { LlmClient, LlmCompleteRequest, LlmCompleteResult, LlmMessage } fro
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_MAX_TOKENS = 1024;
 
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
 interface AnthropicResponse {
   id: string;
   model: string;
   content: Array<{ type: string; text?: string }>;
   stop_reason: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | string;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: AnthropicUsage;
+}
+
+/** Copy provider usage into our shape, omitting absent fields so callers can
+ *  distinguish "not reported" from zero. */
+function mapUsage(u: AnthropicUsage | undefined): NonNullable<LlmCompleteResult['usage']> {
+  const out: NonNullable<LlmCompleteResult['usage']> = {};
+  if (u?.input_tokens !== undefined) out.inputTokens = u.input_tokens;
+  if (u?.output_tokens !== undefined) out.outputTokens = u.output_tokens;
+  if (u?.cache_read_input_tokens !== undefined) out.cacheReadTokens = u.cache_read_input_tokens;
+  if (u?.cache_creation_input_tokens !== undefined) {
+    out.cacheCreationTokens = u.cache_creation_input_tokens;
+  }
+  return out;
 }
 
 export class AnthropicLlmClient implements LlmClient {
@@ -78,15 +98,14 @@ export class AnthropicLlmClient implements LlmClient {
       let text: string;
       let stopReason: AnthropicResponse['stop_reason'] = 'end_turn';
       let model = this.model;
-      const usage: { inputTokens?: number; outputTokens?: number } = {};
+      let usage: NonNullable<LlmCompleteResult['usage']> = {};
 
       if (useStream) {
         const streamed = await consumeStream(res, req.onPartialText!);
         text = streamed.text;
         stopReason = streamed.stopReason;
         model = streamed.model || this.model;
-        if (streamed.inputTokens !== undefined) usage.inputTokens = streamed.inputTokens;
-        if (streamed.outputTokens !== undefined) usage.outputTokens = streamed.outputTokens;
+        usage = streamed.usage;
       } else {
         const body = (await res.json()) as AnthropicResponse;
         text = body.content
@@ -95,8 +114,7 @@ export class AnthropicLlmClient implements LlmClient {
           .join('');
         stopReason = body.stop_reason;
         model = body.model;
-        if (body.usage?.input_tokens !== undefined) usage.inputTokens = body.usage.input_tokens;
-        if (body.usage?.output_tokens !== undefined) usage.outputTokens = body.usage.output_tokens;
+        usage = mapUsage(body.usage);
       }
 
       const latencyMs = Date.now() - startedAt;
@@ -156,11 +174,10 @@ async function consumeStream(
   text: string;
   stopReason: AnthropicResponse['stop_reason'];
   model: string;
-  inputTokens?: number;
-  outputTokens?: number;
+  usage: NonNullable<LlmCompleteResult['usage']>;
 }> {
   if (!res.body) {
-    return { text: '', stopReason: 'end_turn', model: '' };
+    return { text: '', stopReason: 'end_turn', model: '', usage: {} };
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -168,8 +185,9 @@ async function consumeStream(
   let acc = '';
   let stopReason: AnthropicResponse['stop_reason'] = 'end_turn';
   let model = '';
-  let inputTokens: number | undefined;
-  let outputTokens: number | undefined;
+  // Input + cache counts arrive once in `message_start`; output_tokens is
+  // updated in `message_delta` as generation proceeds.
+  const usage: NonNullable<LlmCompleteResult['usage']> = {};
 
   for (;;) {
     const { value, done } = await reader.read();
@@ -194,8 +212,8 @@ async function consumeStream(
       const p = payload as {
         type?: string;
         delta?: { type?: string; text?: string; stop_reason?: AnthropicResponse['stop_reason'] };
-        message?: { model?: string; usage?: { input_tokens?: number; output_tokens?: number } };
-        usage?: { output_tokens?: number };
+        message?: { model?: string; usage?: AnthropicUsage };
+        usage?: AnthropicUsage;
       };
       if (
         p.type === 'content_block_delta' &&
@@ -210,25 +228,16 @@ async function consumeStream(
         }
       } else if (p.type === 'message_start' && p.message) {
         if (p.message.model) model = p.message.model;
-        if (p.message.usage?.input_tokens !== undefined) {
-          inputTokens = p.message.usage.input_tokens;
-        }
+        Object.assign(usage, mapUsage(p.message.usage));
       } else if (p.type === 'message_delta') {
         if (p.delta?.stop_reason) stopReason = p.delta.stop_reason;
-        if (p.usage?.output_tokens !== undefined) outputTokens = p.usage.output_tokens;
+        // Only output_tokens is refreshed here — don't let a delta-scoped
+        // usage object clobber the cache counts from message_start.
+        if (p.usage?.output_tokens !== undefined) usage.outputTokens = p.usage.output_tokens;
       }
     }
   }
-  const result: {
-    text: string;
-    stopReason: AnthropicResponse['stop_reason'];
-    model: string;
-    inputTokens?: number;
-    outputTokens?: number;
-  } = { text: acc, stopReason, model };
-  if (inputTokens !== undefined) result.inputTokens = inputTokens;
-  if (outputTokens !== undefined) result.outputTokens = outputTokens;
-  return result;
+  return { text: acc, stopReason, model, usage };
 }
 
 function splitMessages(messages: LlmMessage[]): { system: string | null; others: LlmMessage[] } {
