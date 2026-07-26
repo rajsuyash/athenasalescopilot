@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { createEmbeddingClient } from '@athena/sdk-embeddings';
 import { createLlmClient } from '@athena/sdk-llm';
 import { createSttClient } from '@athena/sdk-stt';
-import { loadEnv } from './config/env.js';
+import { loadEnv, resolveHotPathModel } from './config/env.js';
 import { authPlugin } from '@athena/auth';
 import { errorHandlerPlugin } from './lib/error-handler.js';
 import { initSubscriber, shutdownSubscriber } from './lib/pubsub.js';
@@ -67,12 +67,21 @@ export async function buildApp(): Promise<FastifyInstance> {
     deterministicDimension: env.EMBEDDING_DIMENSION,
   });
 
-  // Phase 3: hot-path model selection. Reactive coach + proactive coach
-  // both run on the same WS so we use a single shared LLM client; the
-  // hot-path env var (default Haiku 4.5) wins over ANTHROPIC_MODEL when
-  // set. ANTHROPIC_MODEL stays as the explicit override knob for an
-  // emergency rollback to Sonnet without redeploy.
-  const hotPathModel = env.ANTHROPIC_MODEL ?? env.ANTHROPIC_MODEL_HOT_PATH;
+  // Phase 3: hot-path model selection. Reactive coach + proactive coach both
+  // run on the same WS so we use a single shared LLM client.
+  //
+  // Precedence was INVERTED here (`ANTHROPIC_MODEL ?? ANTHROPIC_MODEL_HOT_PATH`),
+  // contradicting the comment and every deploy doc. Impact was deploy-specific:
+  // Railway sets ANTHROPIC_MODEL to Haiku so it happened to be correct, but
+  // docker-compose.prod.yml sets a SHARED ANTHROPIC_MODEL=claude-sonnet-4-6
+  // plus a gateway-scoped ANTHROPIC_MODEL_HOT_PATH=claude-haiku-4-5 — so
+  // compose deploys silently ran the hot path on Sonnet, costing the full
+  // 500-800ms TTFT the hot-path var exists to save.
+  //
+  // Order: explicit hot-path var → ANTHROPIC_MODEL (emergency rollback knob,
+  // e.g. force Sonnet without a redeploy) → Haiku default.
+  const hotPathModel = resolveHotPathModel(env.ANTHROPIC_MODEL_HOT_PATH, env.ANTHROPIC_MODEL);
+  app.log.info({ hotPathModel }, 'coach hot-path model resolved');
   const llm =
     env.LLM_PROVIDER === 'mock'
       ? createLlmClient({ provider: 'mock' })

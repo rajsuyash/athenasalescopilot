@@ -431,8 +431,18 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
     const fireProactive = async (trigger: ProactiveTrigger): Promise<void> => {
       if (!meetingId || inflightCoach || !claims) return;
+      // A customer turn is already queued — never start a script nudge in
+      // front of it. Without this the nudge wins the race and the real turn
+      // waits out the whole proactive LLM call.
+      if (pending) return;
       if (!PROACTIVE_STAGES.includes(currentStage)) return;
       inflightCoach = true;
+      // Proactive calls take the SAME abort handle as reactive ones so a
+      // newly-arrived customer turn can cancel them (handler `onFinal`
+      // aborts whatever is in flight). Previously only reactive calls were
+      // abortable, so a customer turn landing mid-nudge sat in `pending`
+      // until the nudge finished — the single largest stall on the hot path.
+      coachAbort = new AbortController();
       try {
         const r = await proactiveCoach(
           {
@@ -445,6 +455,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             contextTurns: rolling.slice(-8),
             recentSuggestions: recentSuggestions.slice(0, 8),
             establishedFacts,
+            abortSignal: coachAbort.signal,
           },
           deps,
         );
@@ -462,6 +473,12 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         log.error({ err, trigger, stage: currentStage }, 'proactive coach failed');
       } finally {
         inflightCoach = false;
+        coachAbort = null;
+        // A customer turn may have arrived (and aborted us) while in flight.
+        // Drain it here — `drainPending` bails out while `inflightCoach` is
+        // true, so without this hand-off the queued turn is stranded until
+        // the NEXT customer turn arrives.
+        if (pending) void drainPending();
       }
     };
 

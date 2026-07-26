@@ -1,5 +1,25 @@
 import { z } from 'zod';
 
+/** Hot-path coach model when neither ANTHROPIC_MODEL_HOT_PATH nor
+ *  ANTHROPIC_MODEL is set. Haiku 4.5 — lowest TTFT of the Claude tier. */
+export const DEFAULT_HOT_PATH_MODEL = 'claude-haiku-4-5';
+
+/**
+ * Resolve the model the live coach runs on. Extracted + tested because this
+ * precedence shipped INVERTED once (`ANTHROPIC_MODEL ?? hotPath`), which put
+ * every docker-compose deploy's hot path on Sonnet — a silent 500-800ms TTFT
+ * regression that no test or type could catch.
+ *
+ * Order: explicit hot-path var → ANTHROPIC_MODEL (emergency rollback knob) →
+ * Haiku default.
+ */
+export function resolveHotPathModel(
+  hotPath: string | undefined,
+  fallback: string | undefined,
+): string {
+  return hotPath ?? fallback ?? DEFAULT_HOT_PATH_MODEL;
+}
+
 const Schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4040),
@@ -29,11 +49,15 @@ const Schema = z.object({
    * Phase 3: hot-path model used on every customer-turn coachAndPersist
    * call. Haiku 4.5 hits ~360ms TTFT vs Sonnet's 800-1200ms with negligible
    * quality drop on the grounded-answer + objection-reframe output we
-   * actually surface. Saves 500-800ms TTFT per coached turn. Override via
-   * Railway env to A/B against Cerebras/Groq Llama. Falls back to
-   * ANTHROPIC_MODEL when unset, so a one-env-var rollback still works.
+   * actually surface. Saves 500-800ms TTFT per coached turn.
+   *
+   * Resolution order (see server.ts): this var → ANTHROPIC_MODEL →
+   * DEFAULT_HOT_PATH_MODEL. Deliberately OPTIONAL rather than defaulted: a
+   * zod default here is indistinguishable from an operator-set value, which
+   * would make ANTHROPIC_MODEL a dead branch and remove the documented
+   * emergency-rollback knob.
    */
-  ANTHROPIC_MODEL_HOT_PATH: z.string().default('claude-haiku-4-5'),
+  ANTHROPIC_MODEL_HOT_PATH: z.string().optional(),
 
   MIN_DISPLAY_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.5),
   // Lowered 0.5 → 0.35 (2026-05-11): 24h prod data showed 98/98 customer
@@ -69,7 +93,12 @@ const Schema = z.object({
   CORS_ORIGINS: z
     .string()
     .default('http://localhost:3000')
-    .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
+    .transform((s) =>
+      s
+        .split(',')
+        .map((o) => o.trim())
+        .filter(Boolean),
+    ),
 
   /**
    * Pinned chrome-extension origin for the published Web Store build.

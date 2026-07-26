@@ -528,6 +528,18 @@ export type LoopStep = (typeof LOOP_STEPS)[number];
  *  to plain answer/coach mode (per the skill's "If they deflect" guidance). */
 const MAX_DEFLECTIONS = 2;
 
+/** Hot-path LLM deadline. Was 8000ms — a "live" suggestion arriving 8s after
+ *  the prospect stopped talking is worse than no suggestion, and the caller
+ *  already degrades gracefully (reactive → heuristicAnswer, proactive → null).
+ *  Haiku 4.5 completes this output in ~800-1200ms, so 2500 is a tail guard,
+ *  not a routine path. Override with LLM_DEADLINE_MS. */
+const HOT_PATH_LLM_DEADLINE_MS = 2500;
+
+function llmDeadlineMs(): number {
+  const raw = Number(process.env.LLM_DEADLINE_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : HOT_PATH_LLM_DEADLINE_MS;
+}
+
 /** Last retrieval result per meeting, reused on mid-episode turns so the
  *  objection loop's follow-up steps skip the embed+pgvector round trips
  *  (~200-400ms). Cleared when the episode closes; size-capped as a leak guard
@@ -935,6 +947,10 @@ export interface ProactiveInput {
    *  uses these to avoid suggesting the same line twice and to detect when
    *  the rep already spoke a recent suggestion. */
   recentSuggestions?: string[];
+  /** Cancels this proactive run. A real customer turn ALWAYS outranks a
+   *  script nudge — without this the reactive coach queued behind an
+   *  in-flight proactive call for up to the LLM deadline. */
+  abortSignal?: AbortSignal;
 }
 
 /** Loose normalization for similarity checks. Strips punctuation, collapses
@@ -1048,7 +1064,8 @@ export async function proactiveCoach(
     schema: ProactiveSchema,
     temperature: 0.3,
     maxTokens: 200,
-    deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 8000),
+    deadlineMs: llmDeadlineMs(),
+    ...(input.abortSignal ? { signal: input.abortSignal } : {}),
   });
   emitLatency({
     workspaceId: input.workspaceId,
@@ -1493,7 +1510,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       schema: SuggestSchema,
       temperature: 0.2,
       maxTokens: 400,
-      deadlineMs: Number(process.env.LLM_DEADLINE_MS ?? 8000),
+      deadlineMs: llmDeadlineMs(),
       ...(input.abortSignal ? { signal: input.abortSignal } : {}),
       // Phase 2.2: forward streaming text deltas to the gateway handler so
       // it can emit `suggestion.streaming` WS frames. The model writes JSON;
