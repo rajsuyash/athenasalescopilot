@@ -108,6 +108,22 @@ interface SessionDeps {
  *  audio (the customer) is ch0; mic (the rep) is ch1. */
 const REP_CHANNEL = 1;
 
+/**
+ * Join buffered STT fragments into the single utterance the coach sees.
+ *
+ * Deepgram fragments arrive with inconsistent edge whitespace and can be
+ * empty; naive `parts.join(' ')` yields double spaces and leading/trailing
+ * gaps that land straight in the LLM prompt. Pure + exported for tests.
+ */
+export function joinCustomerFragments(parts: readonly string[]): string {
+  return parts
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class SpeakerMap {
   private repLabel: string | null;
   private forceCustomer: boolean;
@@ -255,6 +271,34 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     const REP_SILENCE_MS = 12_000;
     const OPENING_DELAY_MS = 3_000;
 
+    // ─── Customer-turn coalescing ─────────────────────────────────────────
+    //
+    // Deepgram at endpointing=200 slices continuous speech into ~7-word
+    // fragments (prod: 208 segments, avg 7.3 words, 34% of them ≤4 words).
+    // Firing a coach call per fragment meant a 20-word objection started ~3
+    // calls, each aborted by the next — the rep watched suggestion text
+    // appear, vanish, and restart, and only the last call's answer survived.
+    // It also billed ~3x per turn for work thrown away.
+    //
+    // Measured customer inter-segment gaps (prod): p25=0ms, p50=0ms,
+    // p75=930ms, p90=9970ms. The distribution is sharply bimodal — fragments
+    // of one utterance are 0-930ms apart, while real turn boundaries are ~10s.
+    // An 800ms quiet window therefore sits inside utterances and an order of
+    // magnitude below a genuine turn change. Env-tunable because it trades
+    // felt latency against fragment coalescing and deserves field tuning.
+    const COALESCE_WINDOW_MS = Number(process.env.COACH_COALESCE_MS ?? 800);
+    // Hard cap so a long uninterrupted monologue still gets coached: with
+    // p50=0ms gaps the quiet timer keeps resetting while someone talks
+    // continuously, which would otherwise defer coaching indefinitely.
+    const COALESCE_MAX_WAIT_MS = Number(process.env.COACH_COALESCE_MAX_MS ?? 5_000);
+
+    let coalesceParts: string[] = [];
+    let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+    let coalesceStartedAt = 0;
+    let coalesceFirstStartMs = 0;
+    let coalesceLastEndMs = 0;
+    let coalesceLastAt = 0;
+
     const idle = setInterval(() => {
       if (Date.now() - lastFrameAt > deps.idleTimeoutMs) {
         log.warn({ idleMs: Date.now() - lastFrameAt }, 'idle timeout');
@@ -271,6 +315,13 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         clearInterval(proactiveTick);
         proactiveTick = null;
       }
+      // Drop any buffered fragments — the call is over, a suggestion now is
+      // useless and the timer would fire against a closing session.
+      if (coalesceTimer) {
+        clearTimeout(coalesceTimer);
+        coalesceTimer = null;
+      }
+      coalesceParts = [];
       if (sttStream) {
         void sttStream.close().catch(() => {});
         sttStream = null;
@@ -490,6 +541,60 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       }
     };
 
+    /**
+     * Turn the buffered customer fragments into ONE coach call.
+     *
+     * Creates a single Turn row spanning the whole utterance (first
+     * fragment's startMs → last fragment's endMs) rather than one row per
+     * fragment, so `turns` reflects thoughts instead of STT chunking.
+     *
+     * `turnEndAt` is the arrival time of the LAST fragment — the moment the
+     * prospect actually stopped talking. The coalesce window is therefore
+     * counted INSIDE turn_to_first_token, which is honest: the rep is waiting
+     * during it. Stamping it at flush time would hide our own delay.
+     */
+    function flushCoalescedTurn(): void {
+      if (coalesceTimer) {
+        clearTimeout(coalesceTimer);
+        coalesceTimer = null;
+      }
+      if (coalesceParts.length === 0 || !meetingId || !claims) return;
+
+      const customerText = joinCustomerFragments(coalesceParts);
+      const startMs = coalesceFirstStartMs;
+      const endMs = coalesceLastEndMs;
+      const turnEndAt = coalesceLastAt;
+      const fragments = coalesceParts.length;
+      coalesceParts = [];
+
+      if (!customerText) return;
+      if (fragments > 1) {
+        log.debug({ fragments, chars: customerText.length }, 'coalesced customer fragments');
+      }
+
+      // Pre-generate the turn id and insert WITHOUT blocking the coach — this
+      // round trip used to sit in front of every LLM call. The suggestion
+      // insert has an FK on turns, so coachAndPersist awaits `turnReady`
+      // right before persisting (the LLM call gives the insert ~a second of
+      // head start; the await is effectively free).
+      const turnId = crypto.randomUUID();
+      const turnReady = prisma.turn
+        .create({
+          data: { id: turnId, meetingId, speakerType: 'customer', startMs, endMs },
+        })
+        .then(() => undefined)
+        .catch((err) => {
+          log.warn({ err }, 'turn persist failed');
+        });
+
+      pending = { customerText, turnId, turnReady, turnEndAt };
+      // Supersede: a later complete thought outranks a stale in-flight call.
+      // Still needed — the prospect can start a NEW utterance while the coach
+      // is mid-generation on the previous one.
+      if (inflightCoach && coachAbort) coachAbort.abort();
+      void drainPending();
+    }
+
     const onFinal = async (seg: SttSegment): Promise<void> => {
       if (!meetingId || !speakerMap || !claims) return;
       const speaker = speakerMap.classify(seg.speakerLabel, seg.channelIndex);
@@ -558,35 +663,30 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
       if (speaker === 'rep') {
         lastRepFinalAt = Date.now();
+        // The rep speaking is an unambiguous end-of-customer-turn signal —
+        // flush immediately rather than burning the rest of the quiet window.
+        if (coalesceParts.length > 0) flushCoalescedTurn();
         return;
       }
       lastCustomerFinalAt = Date.now();
 
-      // Customer turn → reactive coach path (objection handling, grounded).
-      // Pre-generate the turn id and insert WITHOUT blocking the coach — this
-      // round trip used to sit in front of every LLM call. The suggestion
-      // insert has an FK on turns, so coachAndPersist awaits `turnReady`
-      // right before persisting (the LLM call gives the insert ~a second of
-      // head start; the await is effectively free).
-      const turnId = crypto.randomUUID();
-      const turnReady = prisma.turn
-        .create({
-          data: {
-            id: turnId,
-            meetingId,
-            speakerType: 'customer',
-            startMs: seg.startMs,
-            endMs: seg.endMs,
-          },
-        })
-        .then(() => undefined)
-        .catch((err) => {
-          log.warn({ err }, 'turn persist failed');
-        });
-      pending = { customerText: seg.text, turnId, turnReady, turnEndAt: lastCustomerFinalAt };
-      // A newer complete thought supersedes the stale in-flight call.
-      if (inflightCoach && coachAbort) coachAbort.abort();
-      void drainPending();
+      // Buffer this fragment. The coach fires from flushCoalescedTurn() once
+      // the customer has been quiet for COALESCE_WINDOW_MS (or the max-wait
+      // cap trips), so one complete thought produces exactly one LLM call.
+      if (coalesceParts.length === 0) {
+        coalesceStartedAt = Date.now();
+        coalesceFirstStartMs = seg.startMs;
+      }
+      coalesceParts.push(seg.text.trim());
+      coalesceLastEndMs = seg.endMs;
+      coalesceLastAt = Date.now();
+
+      if (coalesceTimer) clearTimeout(coalesceTimer);
+      if (Date.now() - coalesceStartedAt >= COALESCE_MAX_WAIT_MS) {
+        flushCoalescedTurn();
+      } else {
+        coalesceTimer = setTimeout(flushCoalescedTurn, COALESCE_WINDOW_MS);
+      }
     };
 
     socket.on('message', (data: Buffer, isBinary: boolean) => {
@@ -681,6 +781,11 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         clearInterval(proactiveTick);
         proactiveTick = null;
       }
+      if (coalesceTimer) {
+        clearTimeout(coalesceTimer);
+        coalesceTimer = null;
+      }
+      coalesceParts = [];
       if (sttStream) void sttStream.close().catch(() => {});
       if (meetingId) activeSessions.delete(meetingId);
     });
