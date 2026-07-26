@@ -67,12 +67,44 @@ or provider.
    topical chunks. Cost is one extra `text-embedding-3-small` call
    (~$0.02/1M tokens).
 
-3. **TTFT reduction** (−250 ms). Record `cacheCreationTokens` alongside
-   `cacheReadTokens` to distinguish "never cached" from "cached, never read",
-   then make the stable system prefix actually cacheable, and trim per-chunk
-   prefill payload (currently 5 × 700 chars) without reducing chunk COUNT.
+3. **TTFT reduction** (−250 ms). Trim per-chunk prefill payload (currently
+   5 × 700 chars) without reducing chunk COUNT, and decide what to do about
+   prompt caching — see the amendment below.
 
 Resulting budget: ~150 + ~0 + ~600 + ~300 ≈ **1050 ms**.
+
+### Amendment (2026-07-26, post-measurement)
+
+Two corrections to the numbers above, both from measuring rather than reasoning.
+
+**Retrieval is not worth 411 ms.** Measured per-stage after lever 1 shipped:
+retrieval averages **99 ms** (0 / 0 / 297 ms across three turns) because the
+existing `episodeChunkCache` already serves mid-episode turns. Speculative
+prefix retrieval is therefore worth ~100 ms, not 411 ms, and only on the first
+turn of an episode. Still correct, much smaller.
+
+**Prompt caching cannot engage on Haiku 4.5 at the current prompt size.** The
+minimum cacheable prefix is per-model and NOT monotonic across generations:
+512 (Opus 5 / Fable 5), 1024 (Opus 4.8 / Sonnet 5 / Sonnet 4.6), 2048
+(Opus 4.7), and **4096 for Haiku 4.5** (also Opus 4.6 / 4.5). `SUGGEST_SYSTEM`
+is ~1300–1400 tokens — it clears Sonnet's 1024 but sits ~3× below Haiku's
+floor, and the failure is silent (`cache_read_input_tokens = 0`, no error).
+PRD v2 A6 was right that caching is a no-op; the earlier note in this ADR
+guessed the threshold was 1024 and was wrong. `packages/sdk/llm` carried the
+same wrong figure in a comment since 2026-05-10, which is why the claimed
+100–200 ms saving was never questioned.
+
+Engaging it therefore requires the stable prefix to exceed **4096** tokens —
+roughly 2 800 tokens more than today. That is worth doing only if the added
+content is genuinely useful, and it happens that F18 already calls for exactly
+this: inject the objection-reframer reference material (reframe library per
+archetype, tonality guidance) into the system prompt. Real content that also
+crosses the threshold, rather than padding.
+
+Revised lever-3 budget: caching is deferred to its own phase (prompt rebuild +
+eval), so the achievable near-term budget is ~150 + ~99 + ~760 + ~300 ≈
+**1300 ms**, matching the measured 1272 ms. Reaching ~1000 ms needs either the
+prompt rebuild above or a faster provider (still gated on the eval judge).
 
 Unblocking correctness fix shipped alongside: the authority objection pattern
 required `my` immediately before `partner`, so "talk to my **business**
