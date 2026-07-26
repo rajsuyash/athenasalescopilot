@@ -316,7 +316,11 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     // When the buffer already reads as a finished sentence we don't need the
     // full quiet window — just a short beat in case a trailing fragment is
     // still in flight. This is the -650ms lever in ADR 0003.
-    const SENTENCE_SETTLE_MS = Number(process.env.COACH_SETTLE_MS ?? 150);
+    // 150 → 110ms. Measured customer inter-segment gaps are p50=0ms / p75=930ms,
+    // so a trailing fragment either arrives essentially immediately or the
+    // utterance is genuinely over — the 40ms between 150 and 110 catches almost
+    // nothing, and it is 40ms straight off the speakable-line budget.
+    const SENTENCE_SETTLE_MS = Number(process.env.COACH_SETTLE_MS ?? 110);
     // Below this, terminal punctuation is more likely a filler ("Yeah.",
     // "Right.") than the end of a thought worth coaching on.
     const MIN_WORDS_FOR_EARLY_FLUSH = 4;

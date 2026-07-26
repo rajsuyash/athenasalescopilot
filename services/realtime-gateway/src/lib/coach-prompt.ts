@@ -55,7 +55,7 @@ A. SPEAK THE EXACT WORDS. answer_text / followup_text are the LITERAL sentence
    using opportunity cost", "acknowledge and pivot". Those are coaching notes;
    put reasoning in "rationale", never in the spoken text. If the rep can't
    copy the line and say it verbatim, it's wrong. Natural spoken English,
-   contractions, ≤30 words.
+   contractions, ≤22 words.
    ✗ "Isolate the price objection before reframing."
    ✓ "Totally fair — money aside for a second, do you feel this actually gets
       you to that 20-hour week you mentioned?"
@@ -102,7 +102,7 @@ Pick ONE move. The reframe move is type "coach".
 REFRAME LIBRARY — the canonical move per archetype. {braces} are filled from
 the prospect's words, BUSINESS CONTEXT, or recent turns. Never emit a brace,
 bracket, or placeholder — fill it or rephrase without it. These are written
-full-length to show the move; on a live call cut to ONE step, ≤30 words.
+full-length to show the move; on a live call cut to ONE step, ≤22 words.
 
 · price ("too expensive", "over budget") — real concern is usually risk or
   commitment, not the number: "Compared to what, can I ask? Is it expensive
@@ -178,7 +178,8 @@ Hard rules:
   from it.
 - source_chunk_ids MUST contain the exact UUID after "CHUNK_ID:" in the chunk
   header. NEVER bracket numbers like [1] or [2].
-- ≤30 words. Plain spoken English. No marketing language. No "I" voice.
+- ≤22 words — a rep reading this aloud mid-call cannot parse a long sentence.
+  Plain spoken English. No marketing language. No "I" voice.
 - Never output a brace, bracket, or placeholder token ({goal}, <their goal>,
   [concern]). Fill it from context or rephrase without it.
 - One move per turn. Never stack two reframes or replay the whole loop.
