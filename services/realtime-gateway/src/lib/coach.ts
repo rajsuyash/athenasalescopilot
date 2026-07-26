@@ -528,12 +528,30 @@ export type LoopStep = (typeof LOOP_STEPS)[number];
  *  to plain answer/coach mode (per the skill's "If they deflect" guidance). */
 const MAX_DEFLECTIONS = 2;
 
-/** Hot-path LLM deadline. Was 8000ms — a "live" suggestion arriving 8s after
- *  the prospect stopped talking is worse than no suggestion, and the caller
- *  already degrades gracefully (reactive → heuristicAnswer, proactive → null).
- *  Haiku 4.5 completes this output in ~800-1200ms, so 2500 is a tail guard,
- *  not a routine path. Override with LLM_DEADLINE_MS. */
-const HOT_PATH_LLM_DEADLINE_MS = 2500;
+/**
+ * Hot-path LLM deadline.
+ *
+ * DO NOT tighten this toward observed completion time. It was briefly set to
+ * 2500ms on the assumption Haiku finishes this output in ~800-1200ms. A prod
+ * measurement (2026-07-26) showed the opposite: `suggestion` pinned at
+ * 2508/2508/2509ms across three calls — the deadline itself firing every
+ * time. Every call aborted mid-generation and fell through to
+ * heuristicAnswer(), which surfaces the top chunk's FIRST SENTENCE VERBATIM.
+ * Reps saw raw training material ("**Caveat from source (Reel 15):** …")
+ * instead of a coached line.
+ *
+ * This output is large — type, answer_text, followup_text, source_chunk_ids,
+ * confidence, rationale, the episode block, and new_facts — so full
+ * generation legitimately runs past 2.5s even though first token lands at
+ * ~500ms.
+ *
+ * Perceived latency is already handled by streaming: measured
+ * turn_to_first_token is ~676-1114ms (mean 851ms), so a generous deadline
+ * costs the rep nothing. It exists only to bound a pathological tail. The
+ * real lever for total time is SHRINKING THE OUTPUT, not cutting generation
+ * off partway. Override with LLM_DEADLINE_MS.
+ */
+const HOT_PATH_LLM_DEADLINE_MS = 8000;
 
 function llmDeadlineMs(): number {
   const raw = Number(process.env.LLM_DEADLINE_MS);
