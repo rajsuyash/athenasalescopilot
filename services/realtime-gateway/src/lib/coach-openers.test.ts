@@ -96,6 +96,28 @@ test('instantOpener: returns null when no archetype matches', () => {
   assert.equal(instantOpener('That sounds great, what are next steps?', BC), null);
 });
 
+test('instantOpener: buyer questions outrank objection keywords, even without punctuation', () => {
+  for (const text of [
+    'Why is this so expensive?',
+    'Why is this so expensive',
+    'We already have a vendor, how do you compare',
+    'It is too expensive. Can you explain the pricing',
+    'Can you send me the pricing',
+  ]) {
+    assert.equal(instantOpener(text, BC), null, text);
+  }
+});
+
+test('instantStep: unpunctuated questions do not advance the objection ladder', () => {
+  for (const text of [
+    'How does onboarding work',
+    'Could you explain that',
+    'Pouvez-vous expliquer le prix',
+  ]) {
+    assert.equal(instantStep('isolate', 'price', text), null, text);
+  }
+});
+
 test('extractGoalPhrase: takes a short clause, or nothing', () => {
   assert.equal(extractGoalPhrase(BC), 'missed objections');
   assert.equal(extractGoalPhrase(null), null);
@@ -146,14 +168,17 @@ test('instantOpener: holds the word budget across every goal-phrase length', () 
 // ─── mid-loop canonical steps ───────────────────────────────────────────────
 
 test('instantStep: advances the ladder with a canonical line', () => {
-  assert.deepEqual(instantStep('isolate', 'Yeah I suppose it would help.'), {
+  assert.deepEqual(instantStep('isolate', 'price', 'Yeah I suppose it would help.'), {
     step: 'uncover',
     line: "So what's the real thing you'd want to think through before this is a yes?",
   });
-  assert.equal(instantStep('reframe', 'I guess that makes sense.')?.step, 'justify');
-  assert.equal(instantStep('justify', 'Because we never budgeted for it.')?.step, 'consequence');
+  assert.equal(instantStep('reframe', 'price', 'I guess that makes sense.')?.step, 'justify');
   assert.equal(
-    instantStep('consequence', 'Another two hires we cannot afford.')?.step,
+    instantStep('justify', 'price', 'Because we never budgeted for it.')?.step,
+    'consequence',
+  );
+  assert.equal(
+    instantStep('consequence', 'price', 'Another two hires we cannot afford.')?.step,
     'identity_close',
   );
 });
@@ -161,18 +186,18 @@ test('instantStep: advances the ladder with a canonical line', () => {
 // The reframe is the one step that must adapt to the prospect's own words and
 // numbers, so it stays on the model rather than getting a template.
 test('instantStep: declines the reframe step — it needs the model', () => {
-  assert.equal(instantStep('uncover', "I'm not sure we'd stick with it."), null);
+  assert.equal(instantStep('uncover', 'price', "I'm not sure we'd stick with it."), null);
 });
 
 // A question means they want an answer; marching on with the next Socratic step
 // would talk straight past them.
 test('instantStep: declines when the prospect asked a question', () => {
-  assert.equal(instantStep('isolate', 'How does the Salesforce integration work?'), null);
-  assert.equal(instantStep('justify', 'What does onboarding actually involve?'), null);
+  assert.equal(instantStep('isolate', 'price', 'How does the Salesforce integration work?'), null);
+  assert.equal(instantStep('justify', 'price', 'What does onboarding actually involve?'), null);
 });
 
 test('instantStep: declines at the end of the loop', () => {
-  assert.equal(instantStep('identity_close', 'I see what you mean.'), null);
+  assert.equal(instantStep('identity_close', 'price', 'I see what you mean.'), null);
 });
 
 test('nextLoopStep: walks the ladder and terminates', () => {
@@ -184,10 +209,16 @@ test('nextLoopStep: walks the ladder and terminates', () => {
 
 test('instantStep: every canonical step line is complete and within budget', () => {
   for (const from of ['isolate', 'reframe', 'justify', 'consequence'] as const) {
-    const s = instantStep(from, 'Okay.');
+    const s = instantStep(from, 'price', 'Okay.');
     assert.ok(s, `no step from ${from}`);
     assert.match(s.line, /[.?!]$/);
     assert.ok(s.line.split(/\s+/).filter(Boolean).length <= 18, s.line);
     assert.ok(!/[{}<>[\]]/.test(s.line), `placeholder leaked: ${s.line}`);
   }
+});
+
+test('instantStep: a different concern needs a contextual response, not the old ladder', () => {
+  assert.equal(instantStep('isolate', 'price', 'I need to talk to our procurement team.'), null);
+  assert.equal(instantStep('justify', 'time', 'We already have a vendor for this.'), null);
+  assert.ok(instantStep('justify', 'price', 'We cannot afford another two hires.'));
 });

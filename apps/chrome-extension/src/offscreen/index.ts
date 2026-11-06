@@ -55,6 +55,7 @@ interface UpdateMsg {
 }
 
 interface ActiveCapture {
+  generationId: string | null;
   ws: WebSocket;
   ctx: AudioContext;
   stream: MediaStream;
@@ -83,6 +84,19 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
 
 let active: ActiveCapture | null = null;
+
+function endPreview(cur: ActiveCapture): void {
+  if (!cur.generationId) return;
+  void chrome.runtime
+    .sendMessage({
+      type: 'suggestion.lifecycle.forward',
+      event: 'ended',
+      generationId: cur.generationId,
+      meetingId: cur.meetingId,
+    })
+    .catch(() => undefined);
+  cur.generationId = null;
+}
 
 function reportUpdate(patch: Partial<UpdateMsg>): void {
   const msg: UpdateMsg = { type: 'offscreen.update', ...patch };
@@ -166,6 +180,7 @@ async function start(req: StartMsg): Promise<void> {
   reportUpdate({ micCaptured: micStream !== null });
 
   active = {
+    generationId: null,
     ws: null as unknown as WebSocket,
     ctx,
     stream,
@@ -207,6 +222,7 @@ async function start(req: StartMsg): Promise<void> {
 function openSocket(): void {
   if (!active) return;
   const cur = active;
+  endPreview(cur);
   // No `?token=` — server sends `auth.required` and we reply with the token
   // as a control frame. Keeps credentials out of browser history + proxy logs.
   const wsUrl = cur.gatewayUrl.replace(/^http/, 'ws') + `/v1/sessions`;
@@ -218,6 +234,7 @@ function openSocket(): void {
   cur.authed = false;
 
   ws.addEventListener('open', () => {
+    if (active !== cur || cur.ws !== ws) return;
     if (cur.reconnectAttempt !== null) {
       cur.reconnectAttempt = null;
       reportUpdate({ reconnectAttempt: null });
@@ -232,6 +249,7 @@ function openSocket(): void {
 
     let payload: {
       type?: string;
+      generationId?: string;
       sessionId?: string;
       message?: string;
       code?: string;
@@ -261,7 +279,42 @@ function openSocket(): void {
     } catch {
       return;
     }
-    if (!active) return;
+    if (active !== cur || cur.ws !== ws) return;
+    if (
+      typeof payload.generationId === 'string' &&
+      /^[-a-f0-9]{36}:[1-9][0-9]{0,9}$/i.test(payload.generationId) &&
+      [
+        'suggestion.started',
+        'suggestion.streaming',
+        'suggestion.generated',
+        'suggestion.ended',
+      ].includes(payload.type ?? '')
+    ) {
+      if (payload.type === 'suggestion.started') cur.generationId = payload.generationId;
+      void chrome.runtime
+        .sendMessage({
+          type: 'suggestion.lifecycle.forward',
+          event: payload.type!.slice('suggestion.'.length),
+          generationId: payload.generationId,
+          meetingId: cur.meetingId,
+          suggestion: payload.suggestion,
+          answerText: payload.answerText,
+          followupText: payload.followupText,
+        })
+        .catch(() => undefined);
+      if (payload.type === 'suggestion.generated') {
+        cur.suggestionsHeard += 1;
+        reportUpdate({ suggestionsHeard: cur.suggestionsHeard });
+      }
+      if (
+        (payload.type === 'suggestion.ended' || payload.type === 'suggestion.generated') &&
+        cur.generationId === payload.generationId
+      )
+        cur.generationId = null;
+      return;
+    }
+    // A malformed scoped frame must not fall back to unscoped rendering.
+    if (payload.generationId !== undefined) return;
     switch (payload.type) {
       case 'auth.required':
         // First-frame auth handshake — see file header comment.
@@ -346,7 +399,8 @@ function openSocket(): void {
   });
   ws.addEventListener('close', (ev) => {
     log.warn('[athena-offscreen] ws close', { code: ev.code });
-    if (!active) return;
+    if (active !== cur || cur.ws !== ws) return;
+    endPreview(cur);
     if (ev.code === 1000) {
       reportUpdate({ closed: true, lastError: null });
       return;
@@ -361,6 +415,7 @@ function openSocket(): void {
 
 async function scheduleReconnect(reason: string, fastPath = false): Promise<void> {
   if (!active) return;
+  const cur = active;
   const attempt = (active.reconnectAttempt ?? 0) + 1;
   if (attempt > MAX_RECONNECT_ATTEMPTS) {
     log.warn('[athena-offscreen] reconnect exhausted');
@@ -371,11 +426,12 @@ async function scheduleReconnect(reason: string, fastPath = false): Promise<void
   reportUpdate({ reconnectAttempt: attempt, lastError: `reconnecting (attempt ${attempt})` });
   const delay = fastPath ? 0 : (BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)] ?? 16_000);
   if (delay > 0) await new Promise((res) => setTimeout(res, delay));
-  if (!active) return;
+  if (active !== cur) return;
   try {
     const r = (await chrome.runtime.sendMessage({ type: 'capture.refreshToken' })) as
       | { ok: true; accessToken: string }
       | { ok: false; error?: string };
+    if (active !== cur) return;
     if (r?.ok && r.accessToken) {
       active.accessToken = r.accessToken;
     } else if (r && !r.ok && r.error === 'signed_out') {
@@ -398,7 +454,7 @@ async function scheduleReconnect(reason: string, fastPath = false): Promise<void
   } catch {
     log.warn('[athena-offscreen] refreshToken errored');
   }
-  if (!active) return;
+  if (active !== cur) return;
   openSocket();
 }
 
@@ -406,6 +462,7 @@ async function stop(reason: string): Promise<void> {
   const cur = active;
   active = null;
   if (!cur) return;
+  endPreview(cur);
   try {
     cur.node?.disconnect();
   } catch {

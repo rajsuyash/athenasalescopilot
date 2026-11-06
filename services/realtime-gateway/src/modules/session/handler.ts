@@ -32,6 +32,7 @@ const WS_CLOSE_TOKEN_INVALID = 4001;
 const WS_CLOSE_TOKEN_EXPIRED = 4011;
 import { emitLatency } from '../../lib/latency.js';
 import { endMeeting, runRecap } from '../../lib/postcall.js';
+import { abortable } from './abortable.js';
 
 /**
  * Wire format (newline-delimited JSON for control, binary for audio):
@@ -201,7 +202,11 @@ function userConcurrency(workspaceId: string, userId: string): number {
   return n;
 }
 
-export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps): void {
+export function registerSessionHandler(
+  app: FastifyInstance,
+  deps: SessionDeps,
+  coaches = { reactive: coachAndPersist, proactive: proactiveCoach },
+): void {
   app.get('/v1/sessions', { websocket: true }, async (socket: WebSocket, req: FastifyRequest) => {
     // Two-step auth: try Authorization header first (CLI / server-side
     // callers). Browser callers can't set headers on WebSocket upgrades, so
@@ -248,12 +253,33 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     const rolling: Array<{ speaker: 'rep' | 'customer'; text: string }> = [];
     const sessionId = crypto.randomUUID();
     let lastFrameAt = Date.now();
-    let inflightCoach = false;
     // Abort handle for the in-flight coach call — a newer customer turn
     // supersedes a stale one instead of queueing behind it (fragmented turns
     // made replies feel 3-4s late: the answer to the full thought waited for
     // the partial-fragment call to finish).
     let coachAbort: AbortController | null = null;
+    let coachGeneration = 0;
+    function startCoach() {
+      const controller = new AbortController();
+      const generationId = `${sessionId}:${++coachGeneration}`;
+      let ended = false;
+      const end = (): void => {
+        if (ended) return;
+        ended = true;
+        sendJson(socket, { type: 'suggestion.ended', generationId });
+      };
+      controller.signal.addEventListener('abort', end, { once: true });
+      sendJson(socket, { type: 'suggestion.started', generationId });
+      return {
+        controller,
+        generationId,
+        finish: () => {
+          controller.signal.removeEventListener('abort', end);
+          end();
+        },
+      };
+    }
+
     let pending: {
       customerText: string;
       turnId: string;
@@ -343,6 +369,8 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     const shutdown = (reason: string): void => {
       if (shuttingDown) return;
       shuttingDown = true;
+      pending = null;
+      coachAbort?.abort();
       clearInterval(idle);
       if (proactiveTick) {
         clearInterval(proactiveTick);
@@ -401,55 +429,66 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     };
 
     const drainPending = async (): Promise<void> => {
-      if (inflightCoach || !pending || !meetingId || !claims) return;
+      if (shuttingDown || coachAbort || !pending || !meetingId || !claims) return;
+      const workspaceId = claims.workspaceId;
+      const coachMeetingId = meetingId;
       const { customerText, turnId, turnReady, turnEndAt } = pending;
       pending = null;
-      inflightCoach = true;
-      coachAbort = new AbortController();
+      const { controller, generationId, finish } = startCoach();
+      coachAbort = controller;
+      const isCurrent = (): boolean =>
+        !shuttingDown && coachAbort === controller && !controller.signal.aborted;
       // Phase 2.2: tracks the last streaming text we sent so we only
       // emit deltas (not the full accumulated text) on each frame. The
       // overlay appends each delta to the in-flight card.
       let lastStreamedAnswer = '';
       let lastStreamedFollowup = '';
       try {
-        const r = await coachAndPersist(
-          {
-            workspaceId: claims.workspaceId,
-            meetingId,
-            turnId,
-            customerText,
-            // Reactive coach needs enough history to locate the objection in
-            // the reframe loop AND to see already-answered questions
-            // (coach.ts re-slices to REACTIVE_CONTEXT_TURNS).
-            contextTurns: rolling.slice(-12),
-            openEpisode,
-            recentSuggestions: recentSuggestions.slice(0, 8),
-            establishedFacts,
-            turnReady,
-            turnEndAt,
-            abortSignal: coachAbort.signal,
-            onPartialText: (_delta, accumulated) => {
-              // Anthropic streams raw JSON tokens. We extract just the
-              // user-visible answer_text / followup_text portions and
-              // forward incremental deltas to the rep's overlay so the
-              // glass card fills in as the model writes.
-              const partial = extractStreamingAnswer(accumulated);
-              if (
-                partial.answer !== lastStreamedAnswer ||
-                partial.followup !== lastStreamedFollowup
-              ) {
-                lastStreamedAnswer = partial.answer ?? '';
-                lastStreamedFollowup = partial.followup ?? '';
-                sendJson(socket, {
-                  type: 'suggestion.streaming',
-                  answerText: lastStreamedAnswer || null,
-                  followupText: lastStreamedFollowup || null,
-                });
-              }
-            },
-          },
-          deps,
+        const r = await abortable(
+          () =>
+            coaches.reactive(
+              {
+                workspaceId,
+                meetingId: coachMeetingId,
+                turnId,
+                customerText,
+                // Reactive coach needs enough history to locate the objection in
+                // the reframe loop AND to see already-answered questions
+                // (coach.ts re-slices to REACTIVE_CONTEXT_TURNS).
+                contextTurns: rolling.slice(-12),
+                openEpisode,
+                recentSuggestions: recentSuggestions.slice(0, 8),
+                establishedFacts,
+                turnReady,
+                turnEndAt,
+                abortSignal: controller.signal,
+                onPartialText: (_delta, accumulated) => {
+                  if (!isCurrent()) return;
+                  // Anthropic streams raw JSON tokens. We extract just the
+                  // user-visible answer_text / followup_text portions and
+                  // forward incremental deltas to the rep's overlay so the
+                  // glass card fills in as the model writes.
+                  const partial = extractStreamingAnswer(accumulated);
+                  if (
+                    partial.answer !== lastStreamedAnswer ||
+                    partial.followup !== lastStreamedFollowup
+                  ) {
+                    lastStreamedAnswer = partial.answer ?? '';
+                    lastStreamedFollowup = partial.followup ?? '';
+                    sendJson(socket, {
+                      type: 'suggestion.streaming',
+                      generationId,
+                      answerText: lastStreamedAnswer || null,
+                      followupText: lastStreamedFollowup || null,
+                    });
+                  }
+                },
+              },
+              deps,
+            ),
+          controller.signal,
         );
+        if (!isCurrent()) return;
         // Carry the objection-loop state into the next customer turn.
         openEpisode = r.openEpisode;
         if (r.newFacts.length > 0) establishedFacts = mergeFacts(establishedFacts, r.newFacts);
@@ -462,17 +501,19 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             recentSuggestions.unshift(shown);
             if (recentSuggestions.length > 12) recentSuggestions.length = 12;
           }
-          sendJson(socket, { type: 'suggestion.generated', suggestion: r });
+          sendJson(socket, { type: 'suggestion.generated', generationId, suggestion: r });
         } else {
           // Suppressed (silence gate / dedup / low confidence). The extension
           // renders anything with text, so strip the spoken fields — this both
           // hides the card and clears any in-flight streaming placeholder.
           sendJson(socket, {
             type: 'suggestion.generated',
+            generationId,
             suggestion: { ...r, answerText: null, followupText: null },
           });
         }
       } catch (err) {
+        if (!isCurrent()) return;
         log.error({ err }, 'coach failed');
         sendJson(socket, {
           type: 'error',
@@ -480,9 +521,9 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
           message: err instanceof Error ? err.message : 'unknown',
         });
       } finally {
-        inflightCoach = false;
-        coachAbort = null;
-        if (pending) void drainPending();
+        finish();
+        if (coachAbort === controller) coachAbort = null;
+        if (!shuttingDown && pending) void drainPending();
       }
     };
 
@@ -522,35 +563,44 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
     }
 
     const fireProactive = async (trigger: ProactiveTrigger): Promise<void> => {
-      if (!meetingId || inflightCoach || !claims) return;
+      if (shuttingDown || !meetingId || coachAbort || !claims) return;
+      const workspaceId = claims.workspaceId;
+      const coachMeetingId = meetingId;
       // A customer turn is already queued — never start a script nudge in
       // front of it. Without this the nudge wins the race and the real turn
       // waits out the whole proactive LLM call.
       if (pending) return;
       if (!PROACTIVE_STAGES.includes(currentStage)) return;
-      inflightCoach = true;
       // Proactive calls take the SAME abort handle as reactive ones so a
       // newly-arrived customer turn can cancel them (handler `onFinal`
       // aborts whatever is in flight). Previously only reactive calls were
       // abortable, so a customer turn landing mid-nudge sat in `pending`
       // until the nudge finished — the single largest stall on the hot path.
-      coachAbort = new AbortController();
+      const { controller, generationId, finish } = startCoach();
+      coachAbort = controller;
+      const isCurrent = (): boolean =>
+        !shuttingDown && coachAbort === controller && !controller.signal.aborted;
       try {
-        const r = await proactiveCoach(
-          {
-            workspaceId: claims.workspaceId,
-            meetingId,
-            stage: currentStage,
-            trigger,
-            // Proactive nudges also need to see what was recently covered so
-            // the script line fits the conversation, not the script's order.
-            contextTurns: rolling.slice(-8),
-            recentSuggestions: recentSuggestions.slice(0, 8),
-            establishedFacts,
-            abortSignal: coachAbort.signal,
-          },
-          deps,
+        const r = await abortable(
+          () =>
+            coaches.proactive(
+              {
+                workspaceId,
+                meetingId: coachMeetingId,
+                stage: currentStage,
+                trigger,
+                // Proactive nudges also need to see what was recently covered so
+                // the script line fits the conversation, not the script's order.
+                contextTurns: rolling.slice(-8),
+                recentSuggestions: recentSuggestions.slice(0, 8),
+                establishedFacts,
+                abortSignal: controller.signal,
+              },
+              deps,
+            ),
+          controller.signal,
         );
+        if (!isCurrent()) return;
         // The extension renders any suggestion with text — respect the
         // display gate server-side.
         if (r && r.display) {
@@ -559,18 +609,19 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
             recentSuggestions.unshift(r.followupText);
             if (recentSuggestions.length > 12) recentSuggestions.length = 12;
           }
-          sendJson(socket, { type: 'suggestion.generated', suggestion: r });
+          sendJson(socket, { type: 'suggestion.generated', generationId, suggestion: r });
         }
       } catch (err) {
+        if (!isCurrent()) return;
         log.error({ err, trigger, stage: currentStage }, 'proactive coach failed');
       } finally {
-        inflightCoach = false;
-        coachAbort = null;
+        finish();
+        if (coachAbort === controller) coachAbort = null;
         // A customer turn may have arrived (and aborted us) while in flight.
-        // Drain it here — `drainPending` bails out while `inflightCoach` is
-        // true, so without this hand-off the queued turn is stranded until
+        // Drain it here — `drainPending` bails out while a coach owns the
+        // abort handle, so without this hand-off the queued turn is stranded until
         // the NEXT customer turn arrives.
-        if (pending) void drainPending();
+        if (!shuttingDown && pending) void drainPending();
       }
     };
 
@@ -591,7 +642,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
         clearTimeout(coalesceTimer);
         coalesceTimer = null;
       }
-      if (coalesceParts.length === 0 || !meetingId || !claims) return;
+      if (shuttingDown || coalesceParts.length === 0 || !meetingId || !claims) return;
 
       const customerText = joinCustomerFragments(coalesceParts);
       const startMs = coalesceFirstStartMs;
@@ -624,12 +675,12 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       // Supersede: a later complete thought outranks a stale in-flight call.
       // Still needed — the prospect can start a NEW utterance while the coach
       // is mid-generation on the previous one.
-      if (inflightCoach && coachAbort) coachAbort.abort();
+      coachAbort?.abort();
       void drainPending();
     }
 
     const onFinal = async (seg: SttSegment): Promise<void> => {
-      if (!meetingId || !speakerMap || !claims) return;
+      if (shuttingDown || !meetingId || !speakerMap || !claims) return;
       const speaker = speakerMap.classify(seg.speakerLabel, seg.channelIndex);
       rolling.push({ speaker, text: seg.text });
       if (rolling.length > deps.maxPendingSegments) {
@@ -817,6 +868,9 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
 
     socket.on('close', () => {
       log.info('socket closed');
+      shuttingDown = true;
+      pending = null;
+      coachAbort?.abort();
       clearInterval(idle);
       if (proactiveTick) {
         clearInterval(proactiveTick);
@@ -930,7 +984,7 @@ export function registerSessionHandler(app: FastifyInstance, deps: SessionDeps):
       lastRepFinalAt = captureStartedAt;
       lastCustomerFinalAt = captureStartedAt;
       proactiveTick = setInterval(() => {
-        if (!meetingId || inflightCoach) return;
+        if (!meetingId || coachAbort || shuttingDown) return;
         const now = Date.now();
         if (now - lastSuggestionAt < PROACTIVE_THROTTLE_MS) return;
 

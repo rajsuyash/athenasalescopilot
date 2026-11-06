@@ -182,6 +182,16 @@ export function detectOpenerArchetype(text: string): OpenerArchetype | null {
   return null;
 }
 
+/** STT may omit punctuation; keep explicit buyer questions off template paths. */
+export function isBuyerQuestion(text: string): boolean {
+  if (text.includes('?')) return true;
+  // shortcut: bounded English/French question forms, not semantic intent detection;
+  // expand from labeled transcript misses rather than matching every question word.
+  return /(?:^|[.!;,—]\s*)(?:\s*(?:but|and|so|mais|et|alors)\s+)?\s*(?:(?:how|what|why|when|where|which|who)\s+(?:do|does|did|can|could|would|will|is|are|have|has|happens|handles|owns|much|many|long)\b|(?:can|could|would|will|do|does|did|is|are|have|has)\s+(?:you|your|we|our|it|this|that|the)\b|(?:comment|pourquoi|combien|quel|quelle|quels|quelles)\b|(?:pouvez|pourriez|avez|êtes)[-\s]vous\b|est-ce\s+que\b)/i.test(
+    text.trim(),
+  );
+}
+
 /**
  * Canonical disarm+isolate opener per archetype, condensed from
  * reframe-library.md to the ≤18 words the rep can actually read mid-call.
@@ -287,6 +297,7 @@ export function instantOpener(
   customerText: string,
   businessContext: string | null,
 ): InstantOpener | null {
+  if (isBuyerQuestion(customerText)) return null;
   const archetype = detectOpenerArchetype(customerText);
   if (!archetype) return null;
   const t = OPENERS[archetype];
@@ -366,8 +377,14 @@ export interface InstantStep {
  * would talk past them. Those turns go to the LLM, which can actually answer
  * from the chunks.
  */
-export function instantStep(currentStep: LoopStep, customerText: string): InstantStep | null {
-  if (customerText.includes('?')) return null;
+export function instantStep(
+  currentStep: LoopStep,
+  currentArchetype: OpenerArchetype,
+  customerText: string,
+): InstantStep | null {
+  if (isBuyerQuestion(customerText)) return null;
+  const raisedArchetype = detectOpenerArchetype(customerText);
+  if (raisedArchetype && raisedArchetype !== currentArchetype) return null;
   const step = nextLoopStep(currentStep);
   if (!step) return null;
   const line = STEP_LINES[step];

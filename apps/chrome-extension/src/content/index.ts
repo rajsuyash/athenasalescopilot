@@ -279,7 +279,8 @@ function renderSuggestion(s: OverlaySuggestion): void {
   // the rep reads the line out loud. We show whichever of answerText /
   // followupText is populated (some types fill both; in that case both lines
   // render identically and the rep speaks the whole thing).
-  const SPEAK_STYLE = 'color:#F8FAFC;font-weight:500;font-size:17px;line-height:1.5;margin-bottom:6px';
+  const SPEAK_STYLE =
+    'color:#F8FAFC;font-weight:500;font-size:17px;line-height:1.5;margin-bottom:6px';
   if (s.answerText) {
     const a = document.createElement('div');
     a.textContent = s.answerText;
@@ -326,14 +327,20 @@ function renderSuggestion(s: OverlaySuggestion): void {
 let streamingCard: HTMLElement | null = null;
 let streamingAnswerEl: HTMLElement | null = null;
 let streamingFollowupEl: HTMLElement | null = null;
+let previewGeneration: string | null = null;
+let previewClosed = false;
+let previewCaptureStopped = false;
+const retiredPreviewSessions = new Set<string>();
+
+function clearPreview(): void {
+  commitStreamingCard();
+  panel.setDraft(null, null);
+}
 
 function renderOrUpdateStreamingCard(answerText: string | null, followupText: string | null): void {
   const root = ensureOverlayRoot();
   if (!streamingCard) {
-    // Drop oldest if we'd exceed MAX_VISIBLE — same cap as the final-card path.
-    while (root.children.length >= MAX_VISIBLE) {
-      root.lastElementChild?.remove();
-    }
+    // Keep committed cards until a final replaces this disposable preview.
     const card = document.createElement('div');
     card.className = 'athena-card athena-card-streaming';
     card.style.cssText = [
@@ -396,63 +403,111 @@ function commitStreamingCard(): void {
   }
 }
 
-chrome.runtime.onMessage.addListener((msg: { type?: string; suggestion?: OverlaySuggestion; answerText?: string | null; followupText?: string | null; text?: string }) => {
-  if (msg?.type === 'panel.toggle') {
-    return; // panel.ts handles via its own message listener if needed
-  }
-  if (msg?.type === 'overlay.transcript.customer' && typeof msg.text === 'string') {
-    // Wire the live status block to STT customer finalizations so the
-    // rep sees what the coach is reacting to.
+chrome.runtime.onMessage.addListener(
+  (msg: {
+    type?: string;
+    suggestion?: OverlaySuggestion;
+    answerText?: string | null;
+    followupText?: string | null;
+    text?: string;
+    event?: string;
+    generationId?: string;
+    meetingCode?: string;
+  }) => {
+    if (msg?.type === 'overlay.suggestion.lifecycle') {
+      if (previewCaptureStopped) return;
+      const id = msg.generationId;
+      if (msg.meetingCode !== MEET_RE.exec(window.location.href)?.[1]) return;
+      if (typeof id !== 'string' || !/^[-a-f0-9]{36}:[1-9][0-9]{0,9}$/i.test(id)) return;
+      if (msg.event === 'started') {
+        const [session, sequence] = id.split(':');
+        const [priorSession, priorSequence] = (previewGeneration ?? '').split(':');
+        if (retiredPreviewSessions.has(session!)) return;
+        if (session === priorSession && Number(sequence) <= Number(priorSequence)) return;
+        if (priorSession && session !== priorSession) retiredPreviewSessions.add(priorSession);
+        previewGeneration = id;
+        previewClosed = false;
+        clearPreview();
+        updateCoachChip('thinking');
+        return;
+      }
+      if (id !== previewGeneration || previewClosed) return;
+      if (msg.event === 'ended') {
+        previewClosed = true;
+        clearPreview();
+        updateCoachChip(coachChipState.capturing ? 'listening' : 'off');
+        return;
+      }
+      if (msg.event === 'streaming') {
+        if (!msg.answerText && !msg.followupText) return;
+        msg = { ...msg, type: 'overlay.suggestion.streaming' };
+      } else if (msg.event === 'generated' && msg.suggestion) {
+        previewClosed = true;
+        msg = { ...msg, type: 'overlay.suggestion' };
+      } else return;
+    } else if (
+      previewGeneration &&
+      (msg?.type === 'overlay.suggestion.streaming' || msg?.type === 'overlay.suggestion')
+    ) {
+      return; // Fail closed: gateway rollback to unscoped frames requires a tab reload.
+    }
+    if (msg?.type === 'panel.toggle') {
+      return; // panel.ts handles via its own message listener if needed
+    }
+    if (msg?.type === 'overlay.transcript.customer' && typeof msg.text === 'string') {
+      // Wire the live status block to STT customer finalizations so the
+      // rep sees what the coach is reacting to.
+      try {
+        panel.setCustomerTurn(msg.text);
+      } catch (err) {
+        console.warn('[rocket-content] panel.setCustomerTurn failed', err);
+      }
+      updateCoachChip('thinking');
+      return;
+    }
+    if (msg?.type === 'overlay.suggestion.streaming') {
+      try {
+        renderOrUpdateStreamingCard(msg.answerText ?? null, msg.followupText ?? null);
+        // Mirror the streamed text into the live status panel so the rep
+        // sees the coach drafting in real time, not just the final glass
+        // card pinned at the top of the viewport.
+        panel.setDraft(msg.answerText ?? null, msg.followupText ?? null);
+      } catch (err) {
+        console.warn('[rocket-content] streaming render failed', err);
+      }
+      updateCoachChip('drafting');
+      return;
+    }
+    if (msg?.type !== 'overlay.suggestion' || !msg.suggestion) return;
     try {
-      panel.setCustomerTurn(msg.text);
+      // Replace the streaming placeholder with the final committed card.
+      commitStreamingCard();
+      // Always add to history panel — even rationale-only entries are useful
+      // for the rep to scroll back through. Toast only renders when there's
+      // something speakable on the card; otherwise we'd flash an empty box.
+      panel.add(msg.suggestion);
+      updateCoachChip('delivered');
+      setTimeout(() => {
+        if (coachChipState.phase === 'delivered') updateCoachChip('listening');
+      }, DELIVERED_LINGER_MS);
+      const speakable = !!(msg.suggestion.answerText || msg.suggestion.followupText);
+      // Lightweight tap so reps + support can verify in DevTools that the
+      // gateway → SW → content-script pipe is alive.
+      // eslint-disable-next-line no-console
+      console.debug('[rocket-content] overlay.suggestion', {
+        type: msg.suggestion.type,
+        hasAnswer: !!msg.suggestion.answerText,
+        hasFollowup: !!msg.suggestion.followupText,
+        speakable,
+      });
+      if (speakable) {
+        renderSuggestion(msg.suggestion);
+      }
     } catch (err) {
-      console.warn('[rocket-content] panel.setCustomerTurn failed', err);
+      console.warn('[rocket-content] overlay render failed', err);
     }
-    updateCoachChip('thinking');
-    return;
-  }
-  if (msg?.type === 'overlay.suggestion.streaming') {
-    try {
-      renderOrUpdateStreamingCard(msg.answerText ?? null, msg.followupText ?? null);
-      // Mirror the streamed text into the live status panel so the rep
-      // sees the coach drafting in real time, not just the final glass
-      // card pinned at the top of the viewport.
-      panel.setDraft(msg.answerText ?? null, msg.followupText ?? null);
-    } catch (err) {
-      console.warn('[rocket-content] streaming render failed', err);
-    }
-    updateCoachChip('drafting');
-    return;
-  }
-  if (msg?.type !== 'overlay.suggestion' || !msg.suggestion) return;
-  try {
-    // Replace the streaming placeholder with the final committed card.
-    commitStreamingCard();
-    // Always add to history panel — even rationale-only entries are useful
-    // for the rep to scroll back through. Toast only renders when there's
-    // something speakable on the card; otherwise we'd flash an empty box.
-    panel.add(msg.suggestion);
-    updateCoachChip('delivered');
-    setTimeout(() => {
-      if (coachChipState.phase === 'delivered') updateCoachChip('listening');
-    }, DELIVERED_LINGER_MS);
-    const speakable = !!(msg.suggestion.answerText || msg.suggestion.followupText);
-    // Lightweight tap so reps + support can verify in DevTools that the
-    // gateway → SW → content-script pipe is alive.
-    // eslint-disable-next-line no-console
-    console.debug('[rocket-content] overlay.suggestion', {
-      type: msg.suggestion.type,
-      hasAnswer: !!msg.suggestion.answerText,
-      hasFollowup: !!msg.suggestion.followupText,
-      speakable,
-    });
-    if (speakable) {
-      renderSuggestion(msg.suggestion);
-    }
-  } catch (err) {
-    console.warn('[rocket-content] overlay render failed', err);
-  }
-});
+  },
+);
 
 // ─── Always-visible "● Athena recording" privacy pill ─────────────────────
 //
@@ -513,8 +568,13 @@ function syncPillFromStorage(): void {
   void chrome.storage.local.get(['capture']).then((s) => {
     const cap = (s.capture ?? null) as { closed?: boolean } | null;
     const live = !!cap && !cap.closed;
+    previewCaptureStopped = !live;
     if (live) ensurePillRoot();
-    else removePill();
+    else {
+      removePill();
+      previewClosed = true;
+      clearPreview();
+    }
     // Mirror to the side panel's live status. Lets the pill state drive
     // both the privacy indicator AND the panel's "Capture off" → "Listening"
     // transition without a second SW round-trip.
@@ -545,8 +605,8 @@ const CHIP_POS_KEY = 'athenaChipPos';
 const THINK_TIMEOUT_MS = 5_000;
 const DELIVERED_LINGER_MS = 2_500;
 
-const clampChipY    = (v: number) => Math.min(Math.max(v, 8), window.innerHeight - 48);
-const clampChipLeft = (v: number) => Math.min(Math.max(v, 8), window.innerWidth  - 120);
+const clampChipY = (v: number) => Math.min(Math.max(v, 8), window.innerHeight - 48);
+const clampChipLeft = (v: number) => Math.min(Math.max(v, 8), window.innerWidth - 120);
 
 type CoachPhase = 'off' | 'listening' | 'thinking' | 'drafting' | 'delivered';
 
@@ -602,8 +662,7 @@ function ensureCoachChip(): HTMLElement {
 
   const dot = document.createElement('span');
   dot.id = 'athena-coach-dot';
-  dot.style.cssText =
-    'width:8px;height:8px;border-radius:999px;flex-shrink:0';
+  dot.style.cssText = 'width:8px;height:8px;border-radius:999px;flex-shrink:0';
   chip.appendChild(dot);
 
   const label = document.createElement('span');
@@ -627,15 +686,16 @@ function ensureCoachChip(): HTMLElement {
   chrome.storage.local.get([CHIP_POS_KEY], (res) => {
     const pos = res[CHIP_POS_KEY] as { top: number; left: number } | undefined;
     if (pos) {
-      chip!.style.top   = `${clampChipY(pos.top)}px`;
-      chip!.style.left  = `${clampChipLeft(pos.left)}px`;
+      chip!.style.top = `${clampChipY(pos.top)}px`;
+      chip!.style.left = `${clampChipLeft(pos.left)}px`;
       chip!.style.right = 'auto';
     }
   });
 
   // Drag-to-reposition (FLIP-less pointer capture approach)
   let dragging = false;
-  let ox = 0, oy = 0;
+  let ox = 0,
+    oy = 0;
 
   chip.addEventListener('pointerdown', (e: PointerEvent) => {
     e.stopPropagation();
@@ -650,10 +710,10 @@ function ensureCoachChip(): HTMLElement {
   chip.addEventListener('pointermove', (e: PointerEvent) => {
     if (!dragging) return;
     e.stopPropagation();
-    const newTop  = clampChipY(e.clientY - oy);
+    const newTop = clampChipY(e.clientY - oy);
     const newLeft = clampChipLeft(e.clientX - ox);
-    chip!.style.top   = `${newTop}px`;
-    chip!.style.left  = `${newLeft}px`;
+    chip!.style.top = `${newTop}px`;
+    chip!.style.left = `${newLeft}px`;
     chip!.style.right = 'auto';
   });
 
@@ -661,7 +721,7 @@ function ensureCoachChip(): HTMLElement {
     if (!dragging) return;
     dragging = false;
     chip!.style.cursor = 'grab';
-    const top  = parseFloat(chip!.style.top);
+    const top = parseFloat(chip!.style.top);
     const left = parseFloat(chip!.style.left);
     chrome.storage.local.set({ [CHIP_POS_KEY]: { top, left } });
   });
@@ -775,7 +835,9 @@ function findCaptionRegion(): Element | null {
     // 4. Class-name heuristic — Meet's caption surface often has a class
     //    containing "caption" (e.g. nMcdL, but also a11y-friendly classes).
     () => {
-      const byClass = document.querySelectorAll<HTMLElement>('div[class*="caption" i], div[class*="Caption"]');
+      const byClass = document.querySelectorAll<HTMLElement>(
+        'div[class*="caption" i], div[class*="Caption"]',
+      );
       for (const el of Array.from(byClass)) {
         const txt = (el.textContent ?? '').trim();
         if (txt.length > 4 && el.querySelectorAll('button').length === 0) return el;

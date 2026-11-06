@@ -10,6 +10,7 @@ import type { LlmClient } from '@athena/sdk-llm';
 import {
   instantOpener,
   instantStep,
+  isBuyerQuestion,
   type LoopStep as OpenerLoopStep,
   type OpenerArchetype,
 } from './coach-openers.js';
@@ -258,7 +259,7 @@ export function classifyHeuristic(text: string): HeuristicResult {
     for (const p of patterns) if (p.test(t)) s += 1;
     if (s > 0) scores.set(cat, s);
   }
-  const questionMarks = (t.match(/\?/g) ?? []).length;
+  const isQuestion = isBuyerQuestion(t);
   const hasObjectionWords =
     /\b(?:but|however|concern|worri|skeptic|too|expensive|afford|think|sleep on|talk to|wife|husband|partner|cofounder|co-founder|burned|burnt|other (?:vendor|option)|compare|too expensive|not sure|money|commit|busy|already (?:have|use)|have a vendor|have a solution)\b/i.test(
       t,
@@ -285,7 +286,7 @@ export function classifyHeuristic(text: string): HeuristicResult {
   if (hasObjectionWords) bestStage = 'objection_handling';
   const cap = (n: number) => Math.max(0, Math.min(1, n));
   const urgencyScore = cap(
-    (questionMarks > 0 ? 0.4 : 0) +
+    (isQuestion ? 0.4 : 0) +
       (scores.size > 0 ? 0.3 : 0) +
       (hasObjectionWords ? 0.2 : 0) +
       Math.min(0.1, t.length / 1000),
@@ -479,8 +480,11 @@ async function retrieve(
   embeddings: EmbeddingClient,
   categories: readonly IntentCategory[],
   language: string | null,
+  signal?: AbortSignal,
 ): Promise<RetrievedChunk[]> {
+  signal?.throwIfAborted();
   const { vectors } = await embeddings.embed({ workspaceId, texts: [query] });
+  signal?.throwIfAborted();
   const qVec = vectors[0];
   if (!qVec) return [];
 
@@ -944,6 +948,7 @@ export async function proactiveCoach(
   input: ProactiveInput,
   deps: CoachDeps,
 ): Promise<CoachOutput | null> {
+  input.abortSignal?.throwIfAborted();
   if (!deps.llm) return null;
   const tStart = Date.now();
   const emitTotal = (degraded = false): void => {
@@ -960,6 +965,7 @@ export async function proactiveCoach(
     getActiveScriptForStage(input.workspaceId, input.stage),
     getBusinessContext(input.workspaceId),
   ]);
+  input.abortSignal?.throwIfAborted();
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
@@ -1017,6 +1023,7 @@ export async function proactiveCoach(
     deadlineMs: llmDeadlineMs(),
     ...(input.abortSignal ? { signal: input.abortSignal } : {}),
   });
+  input.abortSignal?.throwIfAborted();
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
@@ -1063,6 +1070,7 @@ export async function proactiveCoach(
       endMs: 0,
     },
   });
+  input.abortSignal?.throwIfAborted();
 
   const row = await prisma.suggestion.create({
     data: {
@@ -1275,6 +1283,7 @@ async function applyEpisodeDecision(
   input: CoachInput,
   prior: EpisodeState | null | undefined,
 ): Promise<EpisodeState | null> {
+  input.abortSignal?.throwIfAborted();
   switch (decision.kind) {
     case 'none':
       return prior ?? null;
@@ -1328,9 +1337,11 @@ async function applyEpisodeDecision(
 }
 
 export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promise<CoachOutput> {
+  input.abortSignal?.throwIfAborted();
   if (!input.workspaceId) throw new Error('workspaceId required');
   const tStart = Date.now();
   const intent = classifyHeuristic(input.customerText);
+  const informationQuestion = isBuyerQuestion(input.customerText);
   emitLatency({
     workspaceId: input.workspaceId,
     meetingId: input.meetingId,
@@ -1344,7 +1355,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   // ~0.30 < 0.35, suppressing them before the LLM). Objection turns are a
   // fraction of the call and cheap on Haiku, so bypassing the gate for them is
   // cost-acceptable while capturing the recall the eval flagged.
-  if (!intent.isObjection && intent.urgencyScore < deps.urgencyThreshold) {
+  if (!intent.isObjection && !informationQuestion && intent.urgencyScore < deps.urgencyThreshold) {
     // Tagged degraded:true so the analytics aggregator can exclude these
     // non-events from p50/p95 — the rep never sees an LLM call here.
     emitLatency({
@@ -1379,6 +1390,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   // waiting at a turn boundary.
   if (deps.instantOpeners !== false) {
     const businessContext = await getBusinessContext(input.workspaceId);
+    input.abortSignal?.throwIfAborted();
     // Fresh objection → canonical opener. Mid-episode → the next canonical
     // loop step, unless that step is `reframe` (needs the model) or the
     // prospect asked a question (they want an answer, not the next Socratic
@@ -1392,7 +1404,11 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
               : null;
           })()
         : (() => {
-            const s = instantStep(input.openEpisode.currentStep, input.customerText);
+            const s = instantStep(
+              input.openEpisode.currentStep,
+              input.openEpisode.archetype,
+              input.customerText,
+            );
             return s
               ? {
                   line: s.line,
@@ -1457,6 +1473,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       }
 
       if (input.turnReady) await input.turnReady;
+      input.abortSignal?.throwIfAborted();
       try {
         const row = await prisma.suggestion.create({
           data: {
@@ -1503,9 +1520,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   // OpenAI round trip) + pgvector pass. Reuse the episode's chunks unless the
   // prospect asked a new question (fresh info need → fresh retrieval).
   const cachedChunks =
-    input.openEpisode && !input.customerText.includes('?')
-      ? episodeChunkCache.get(input.meetingId)
-      : undefined;
+    input.openEpisode && !informationQuestion ? episodeChunkCache.get(input.meetingId) : undefined;
   // Phase 2.1: retrieve() and getActiveScriptForStage() are independent DB
   // operations — both are needed for the LLM call but neither depends on
   // the other. Running in parallel saves the script-fetch round-trip
@@ -1518,12 +1533,14 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
         deps.embeddings,
         intent.categories,
         input.language ?? null,
+        input.abortSignal,
       ),
     deps.llm
       ? getActiveScriptForStage(input.workspaceId, intent.stageSignal)
       : Promise.resolve(null),
     deps.llm ? getBusinessContext(input.workspaceId) : Promise.resolve(null),
   ]);
+  input.abortSignal?.throwIfAborted();
   if (!cachedChunks && chunks.length > 0) cacheEpisodeChunks(input.meetingId, chunks);
   emitLatency({
     workspaceId: input.workspaceId,
@@ -1551,8 +1568,10 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   let servedModel: string | undefined;
   let cacheReadTokens: number | undefined;
   if (!deps.llm) {
-    out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence);
+    out = suppressed(intent, 'model unavailable; no verified answer');
   } else {
+    // Short references save streamed tokens; only this request can resolve them to stored IDs.
+    const sourceIds = new Map(chunks.map((chunk, i) => [`c${i + 1}`, chunk.id]));
     const userPrompt = [
       `Customer turn:\n${input.customerText}`,
       businessContext
@@ -1586,16 +1605,20 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       scriptBody
         ? `Workspace playbook for stage=${intent.stageSignal} (METHODOLOGY — internalize the pattern and adapt to the prospect's actual words; DO NOT quote verbatim; never cite as a chunk):\n${scriptBody}`
         : null,
-      `Approved chunks (use the UUID after "CHUNK_ID:" in source_chunk_ids — never the bracket number):\n\n${chunks
+      `Approved chunks (copy the SOURCE_REF into source_chunk_ids, e.g. "c1"):\n\n${chunks
         .map(
           (c, i) =>
-            `[${i + 1}] CHUNK_ID:${c.id} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text.length > CHUNK_CHAR_CAP ? `${c.text.slice(0, CHUNK_CHAR_CAP)}…` : c.text}`,
+            `SOURCE_REF:c${i + 1} score=${c.score.toFixed(3)} doc=${c.documentName ?? '?'}\n${c.text.length > CHUNK_CHAR_CAP ? `${c.text.slice(0, CHUNK_CHAR_CAP)}…` : c.text}`,
         )
         .join('\n\n')}`,
+      informationQuestion
+        ? 'INFORMATION QUESTION: answer only the customer question in at most 12 spoken words, using approved chunks. State the requested fact directly; omit every other feature or certification. This overrides objection reframing and any open episode. One spoken field; no appended sales question.'
+        : null,
     ]
       .filter(Boolean)
       .join('\n\n');
 
+    let previewSent = false;
     const r = await deps.llm.complete({
       workspaceId: input.workspaceId,
       messages: [
@@ -1613,7 +1636,8 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
       // text (answer_text / followup_text) only.
       ...(input.onPartialText
         ? {
-            onPartialText: (d: string, a: string) => {
+            onPartialText: (_d: string, a: string) => {
+              if (input.abortSignal?.aborted) return;
               if (!ttftEmitted) {
                 ttftEmitted = true;
                 const now = Date.now();
@@ -1623,8 +1647,7 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
                   stage: 'llm_ttft',
                   latencyMs: now - tSuggest,
                 });
-                // What the rep actually feels: prospect stopped talking →
-                // first word on screen. Spans queue wait + retrieval + TTFT.
+                // Legacy metric: final transcript → raw model delta, not visible text.
                 if (input.turnEndAt !== undefined) {
                   emitLatency({
                     workspaceId: input.workspaceId,
@@ -1634,36 +1657,75 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
                   });
                 }
               }
-              input.onPartialText?.(d, a);
+              // Wait for both fields so an overlong or two-line draft never reaches the overlay.
+              if (!previewSent) {
+                const type = /"type"\s*:\s*"(answer|ask_next|coach|risk|none)"/.exec(a)?.[1];
+                const answer = /"answer_text"\s*:\s*("(?:\\.|[^"\\])*"|null)/.exec(a);
+                const followup = /"followup_text"\s*:\s*("(?:\\.|[^"\\])*"|null)/.exec(a);
+                const sources = /"source_chunk_ids"\s*:\s*(\[[^\]]*\])/.exec(a);
+                if (
+                  type &&
+                  type !== 'none' &&
+                  (!informationQuestion || type === 'answer') &&
+                  answer &&
+                  followup &&
+                  sources
+                ) {
+                  try {
+                    const answerText = JSON.parse(answer[1]!) as string | null;
+                    const followupText = JSON.parse(followup[1]!) as string | null;
+                    const ids: unknown = JSON.parse(sources[1]!);
+                    if (
+                      Array.isArray(ids) &&
+                      (type !== 'answer' || ids.length > 0) &&
+                      ids.every((id) => typeof id === 'string' && sourceIds.has(id)) &&
+                      isConciseSpokenLine(answerText, followupText)
+                    ) {
+                      previewSent = true;
+                      input.onPartialText?.(
+                        '',
+                        JSON.stringify({ answer_text: answerText, followup_text: followupText }),
+                      );
+                    }
+                  } catch {
+                    /* A malformed JSON escape is not a displayable preview. */
+                  }
+                }
+              }
             },
           }
         : {}),
     });
 
+    input.abortSignal?.throwIfAborted();
     servedModel = r.model;
     cacheReadTokens = r.usage?.cacheReadTokens;
 
-    if (r.finishReason === 'cancelled' && input.abortSignal?.aborted) {
-      // Superseded by a newer customer turn — say nothing; the fresh call
-      // answers the complete thought. Keep the episode as-is.
-      out = {
-        ...suppressed(intent, 'superseded by newer turn'),
-        openEpisode: input.openEpisode ?? null,
-      };
-    } else if (!r.parsed || r.finishReason === 'cancelled' || r.finishReason === 'error') {
-      out = heuristicAnswer(intent, chunks, deps.minDisplayConfidence, 'llm fallback');
+    if (!r.parsed || r.finishReason !== 'stop') {
+      out = suppressed(intent, `model ${r.finishReason}; no verified answer`);
     } else {
       // Capture the objection-loop report regardless of source-citation
       // validity — the objection progression is independent of grounding.
       episodeReport = r.parsed.episode;
       const claimed = r.parsed.source_chunk_ids ?? [];
-      const allowed = new Set(chunks.map((c) => c.id));
-      const cleaned = claimed.filter((id) => allowed.has(id));
+      const cleaned = claimed.flatMap((ref) => {
+        const id = sourceIds.get(ref);
+        return id ? [id] : [];
+      });
       if (r.parsed.type === 'none') {
         // The model judged nothing worth saying for this turn — stay silent.
         out = suppressed(intent, 'llm: nothing relevant');
       } else if (cleaned.length !== claimed.length) {
         out = suppressed(intent, 'policy_violation: invalid_source');
+      } else if (informationQuestion && r.parsed.type !== 'answer') {
+        episodeReport = undefined;
+        out = suppressed(intent, 'information question requires a direct answer');
+      } else if (r.parsed.type === 'answer' && cleaned.length === 0) {
+        episodeReport = undefined;
+        out = suppressed(intent, 'policy_violation: factual answer without an explicit source');
+      } else if (!isConciseSpokenLine(r.parsed.answer_text, r.parsed.followup_text)) {
+        episodeReport = undefined;
+        out = suppressed(intent, 'spoken output must be one complete line of at most 18 words');
       } else {
         const top = chunks[0]?.score ?? 0;
         const conf = clamp01(r.parsed.confidence * 0.7 + top * 0.3);
@@ -1674,13 +1736,13 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
           followupText: r.parsed.followup_text,
           confidenceScore: conf,
           priorityScore: priority,
-          sourceChunkIds: cleaned.length > 0 ? cleaned : chunks.slice(0, 1).map((c) => c.id),
+          sourceChunkIds: cleaned,
           policyVersion: POLICY_VERSION,
           rationale: r.parsed.rationale,
           display: conf >= deps.minDisplayConfidence,
           intent: { ...intent, source: 'llm' },
           sources: chunks
-            .filter((c) => (cleaned.length > 0 ? cleaned.includes(c.id) : c === chunks[0]))
+            .filter((c) => cleaned.includes(c.id))
             .map((c) => ({ id: c.id, documentName: c.documentName, score: c.score })),
           suggestionId: null,
           newFacts: r.parsed.new_facts ?? [],
@@ -1716,12 +1778,14 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   } catch {
     out.openEpisode = input.openEpisode ?? null;
   }
+  input.abortSignal?.throwIfAborted();
 
   // Persist if there's something worth keeping.
   if (out.answerText || out.followupText) {
     // Turn insert was fired without blocking the coach — make sure it has
     // committed before the FK-dependent suggestion insert.
     if (input.turnReady) await input.turnReady;
+    input.abortSignal?.throwIfAborted();
     const row = await prisma.suggestion.create({
       data: {
         workspaceId: input.workspaceId,
@@ -1759,33 +1823,11 @@ export async function coachAndPersist(input: CoachInput, deps: CoachDeps): Promi
   return out;
 }
 
-function heuristicAnswer(
-  intent: HeuristicResult,
-  chunks: RetrievedChunk[],
-  minConf: number,
-  rationaleSuffix?: string,
-): CoachOutput {
-  const top = chunks[0];
-  if (!top) return askNext(intent, null);
-  const sentence = (top.text.match(/[^.!?]+[.!?]/)?.[0] ?? top.text).trim();
-  const conf = clamp01(0.4 + top.score * 0.5);
-  const priority = clamp01(intent.urgencyScore * 0.6 + conf * 0.4);
-  return {
-    type: 'answer',
-    answerText: sentence,
-    followupText: null,
-    confidenceScore: conf,
-    priorityScore: priority,
-    sourceChunkIds: [top.id],
-    policyVersion: POLICY_VERSION,
-    rationale: `top chunk ${top.documentName ?? '?'} score=${top.score.toFixed(2)}${rationaleSuffix ? ` (${rationaleSuffix})` : ''}`,
-    display: conf >= minConf,
-    intent: { ...intent, source: 'heuristic' },
-    sources: [{ id: top.id, documentName: top.documentName, score: top.score }],
-    suggestionId: null,
-    newFacts: [],
-    openEpisode: null,
-  };
+function isConciseSpokenLine(answer: string | null, followup: string | null): boolean {
+  const lines = [answer, followup].filter((s): s is string => !!s?.trim());
+  if (lines.length !== 1) return false;
+  const words = lines[0]!.split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word));
+  return words.length > 0 && words.length <= 18;
 }
 
 function askNext(intent: HeuristicResult, category: string | null): CoachOutput {

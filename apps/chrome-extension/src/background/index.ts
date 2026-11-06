@@ -1088,6 +1088,43 @@ interface SuggestionForwardMsg {
   suggestion: unknown;
 }
 
+// Preserve gateway order across asynchronous storage reads and tab delivery.
+let coachRelay = Promise.resolve();
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (!isPrivilegedSender(sender) || !raw || typeof raw !== 'object') return;
+  const msg = raw as Record<string, unknown>;
+  if (msg.type !== 'suggestion.lifecycle.forward') return;
+  if (
+    typeof msg.generationId !== 'string' ||
+    !/^[-a-f0-9]{36}:[1-9][0-9]{0,9}$/i.test(msg.generationId)
+  )
+    return;
+  if (typeof msg.meetingId !== 'string' || msg.meetingId.length > 64) return;
+  if (!['started', 'streaming', 'generated', 'ended'].includes(String(msg.event))) return;
+  const suggestion = msg.event === 'generated' ? sanitizeSuggestion(msg.suggestion) : null;
+  if (msg.event === 'generated' && !suggestion) return;
+  const payload = {
+    type: 'overlay.suggestion.lifecycle',
+    event: msg.event,
+    generationId: msg.generationId,
+    suggestion,
+    answerText: clampString(msg.answerText, MAX_SUGGESTION_FIELD_LEN),
+    followupText: clampString(msg.followupText, MAX_SUGGESTION_FIELD_LEN),
+  };
+  coachRelay = coachRelay
+    .then(async () => {
+      const active = await getActive();
+      // Never broadcast a scoped draft into another meeting's tab.
+      if (!active || active.tabId < 0 || active.internalMeetingId !== msg.meetingId) return;
+      await chrome.tabs.sendMessage(
+        active.tabId,
+        { ...payload, meetingCode: active.meetingId },
+        { frameId: 0 },
+      );
+    })
+    .catch(() => undefined);
+});
+
 // Footer link in the in-Meet panel — opens the admin-web meeting page.
 //
 // Two gotchas this handler accounts for:
